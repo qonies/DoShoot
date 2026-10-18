@@ -22,7 +22,7 @@
 
 ## 仓库与凭据（2026-10-18）
 - GitHub：`qonies/DoShoot`（**public**，2026-10-18 由 private 改为 public），remote origin 已配置，主分支 main
-- Release：v0.2.5 已发布（tag v0.2.5 + release notes，无构建产物 assets）
+- Release：**v0.3.1 已发布**（tag v0.3.1 + release notes，无构建产物 assets，内容覆盖 M3 系统完整 + M4 打磨完善）；历史 v0.2.5
 - 凭据助手配置在**仓库本地**：`git config credential.helper "!gh auth git-credential"`（gh CLI 已登录 qonies；本机 HOME 指向自定义目录导致 gh 无法写全局 .gitconfig，故用仓库级配置）
 
 ## 环境与命令（2026-10-18 实测可用）
