@@ -1,6 +1,6 @@
 /** 键鼠输入：WASD 移动、鼠标瞄准、开火（含按下沿）、换弹/切枪指令（FR-C1/C2、FR-W3、FR-U1 准星跟随） */
 
-import { WEAPON_ORDER, type WeaponId } from '@deadshot/shared';
+import { WEAPON_ORDER, type WeaponId } from '@DoShoot/shared';
 
 /** 一帧内的输入指令（消费型：consumeCommands 读取后一次性标志复位） */
 export interface InputCommand {

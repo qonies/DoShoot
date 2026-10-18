@@ -1,6 +1,6 @@
 /** 服务端 Bot 占位 AI（与 M1 同策略：随机游走 + 视线内最近敌人点射；巡逻/追击/躲避状态机与网格寻路在 M3，见 FR-B1~B5） */
 
-import { isWall, raycastWalls, type GameMap } from '@deadshot/shared';
+import { isWall, raycastWalls, type GameMap } from '@DoShoot/shared';
 import type { SimFighter } from './room';
 
 export const BOT_SPEED_FACTOR = 0.65;

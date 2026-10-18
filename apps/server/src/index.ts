@@ -1,4 +1,4 @@
-/** DeadShot 权威服务端（M2 联机 FFA）：HTTP 静态托管/健康检查 + Socket.IO 进房/输入/快照 + 房间权威模拟 */
+/** DoShoot 权威服务端（M2 联机 FFA）：HTTP 静态托管/健康检查 + Socket.IO 进房/输入/快照 + 房间权威模拟 */
 
 import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
@@ -6,7 +6,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Server } from 'socket.io';
-import { DEFAULT_MAP, PROTOCOL_VERSION, type InputMsg, type JoinMsg } from '@deadshot/shared';
+import { DEFAULT_MAP, PROTOCOL_VERSION, type InputMsg, type JoinMsg } from '@DoShoot/shared';
 import { Room } from './room';
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -28,7 +28,7 @@ const httpServer = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
   if (url.pathname === '/health') {
     res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
-    res.end('DeadShot server OK');
+    res.end('DoShoot server OK');
     return;
   }
   // 同源托管客户端构建产物（客户端 io('/') 直连本服务端；路径规范化 + 前缀校验防目录穿越）
@@ -99,7 +99,7 @@ httpServer.listen(PORT, () => {
   console.log(`[server] listening on http://localhost:${PORT} (protocol v${PROTOCOL_VERSION})`);
 });
 
-// 冒烟自检：通过 `pnpm -F @deadshot/server smoke` 触发，启动后自请求并退出
+// 冒烟自检：通过 `pnpm -F @DoShoot/server smoke` 触发，启动后自请求并退出
 if (process.env.npm_lifecycle_event === 'smoke') {
   setTimeout(async () => {
     try {

@@ -14,7 +14,7 @@ importers:
 
   apps/client:
     dependencies:
-      '@deadshot/shared':
+      '@DoShoot/shared':
         specifier: workspace:*
         version: link:../../packages/shared
       socket.io-client:
@@ -36,7 +36,7 @@ importers:
 
   apps/server:
     dependencies:
-      '@deadshot/shared':
+      '@DoShoot/shared':
         specifier: workspace:*
         version: link:../../packages/shared
       socket.io:

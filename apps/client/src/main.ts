@@ -2,7 +2,7 @@
 
 import './style.css';
 import * as THREE from 'three';
-import { DEFAULT_MAP, PROTOCOL_VERSION, type SnapshotMsg, type WelcomeMsg } from '@deadshot/shared';
+import { DEFAULT_MAP, PROTOCOL_VERSION, type SnapshotMsg, type WelcomeMsg } from '@DoShoot/shared';
 import { applyDom, getLang, t, toggleLang } from './i18n';
 import { GameScene } from './game/scene';
 import { NetWorld } from './game/world';
@@ -10,7 +10,7 @@ import { Input } from './game/input';
 import { Hud } from './game/hud';
 import { Net } from './game/net';
 
-const NICKNAME_KEY = 'deadshot.nickname';
+const NICKNAME_KEY = 'DoShoot.nickname';
 /** 上行输入发送频率（FR-N1/N2 配套） */
 const INPUT_SEND_RATE = 30;
 

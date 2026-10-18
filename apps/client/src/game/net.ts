@@ -7,7 +7,7 @@ import type {
   JoinRejectedMsg,
   SnapshotMsg,
   WelcomeMsg,
-} from '@deadshot/shared';
+} from '@DoShoot/shared';
 
 export interface NetHandlers {
   onWelcome(msg: WelcomeMsg): void;

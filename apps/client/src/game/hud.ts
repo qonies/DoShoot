@@ -1,7 +1,7 @@
 /** 基础 HUD（FR-U1/C3/C4）：血条、弹药/换弹、击杀流、动态准星、命中标记、伤害飘字、受击泛红、重生界面 */
 
 import { t } from '../i18n';
-import type { WeaponId } from '@deadshot/shared';
+import type { WeaponId } from '@DoShoot/shared';
 import type { GameScene } from './scene';
 
 export interface RespawnInfo {

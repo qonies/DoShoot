@@ -1,5 +1,5 @@
 {
-  "name": "@deadshot/client",
+  "name": "@DoShoot/client",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@deadshot/shared": "workspace:*",
+    "@DoShoot/shared": "workspace:*",
     "socket.io-client": "4.8.4",
     "three": "^0.180.0"
   },

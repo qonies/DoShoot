@@ -4,7 +4,7 @@
 import { createServer } from 'node:http';
 import { Server } from 'socket.io';
 import { io as Client, type Socket } from 'socket.io-client';
-import { DEFAULT_MAP, PROTOCOL_VERSION, type InputMsg, type SnapshotMsg, type WelcomeMsg } from '@deadshot/shared';
+import { DEFAULT_MAP, PROTOCOL_VERSION, type InputMsg, type SnapshotMsg, type WelcomeMsg } from '@DoShoot/shared';
 import { Room } from '../apps/server/src/room';
 
 const PORT = 3100;

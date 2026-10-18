@@ -6,7 +6,7 @@ import {
   WALL_HEIGHT,
   isWall,
   type GameMap,
-} from '@deadshot/shared';
+} from '@DoShoot/shared';
 
 export class GameScene {
   readonly scene = new THREE.Scene();

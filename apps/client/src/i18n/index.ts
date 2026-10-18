@@ -7,7 +7,7 @@ export type Lang = 'zh' | 'en';
 type Dict = Record<string, string>;
 
 const resources: Record<Lang, Dict> = { zh, en };
-const STORAGE_KEY = 'deadshot.lang';
+const STORAGE_KEY = 'DoShoot.lang';
 
 function detectLang(): Lang {
   try {

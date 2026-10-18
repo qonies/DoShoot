@@ -1,4 +1,4 @@
-# DeadShot Web
+# DoShoot Web
 
 浏览器多人在线俯视角射击游戏（对标 deadshot.io）。技术路线见 `docs/requirements.md`。
 

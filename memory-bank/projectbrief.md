@@ -1,7 +1,7 @@
 # 项目简报（Project Brief）
 
 ## 项目名
-DeadShot Web — 浏览器多人在线俯视角射击游戏（对标 deadshot.io）
+DoShoot Web — 浏览器多人在线俯视角射击游戏（对标 deadshot.io）
 
 ## 核心需求
 1. 打开网页、输入昵称、10 秒内进入对局（免注册）

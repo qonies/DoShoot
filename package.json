@@ -1,18 +1,18 @@
 {
-  "name": "deadshot",
+  "name": "DoShoot",
   "version": "0.1.0",
   "private": true,
-  "description": "DeadShot Web — 浏览器多人在线俯视角射击游戏（对标 deadshot.io）",
+  "description": "DoShoot Web — 浏览器多人在线俯视角射击游戏（对标 deadshot.io）",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "dev:client": "corepack pnpm -F @deadshot/client dev",
-    "dev:server": "corepack pnpm -F @deadshot/server dev",
+    "dev:client": "corepack pnpm -F @DoShoot/client dev",
+    "dev:server": "corepack pnpm -F @DoShoot/server dev",
     "build": "corepack pnpm -r build",
     "typecheck": "corepack pnpm -r typecheck",
-    "smoke:server": "corepack pnpm -F @deadshot/server smoke",
-    "smoke:net": "corepack pnpm -F @deadshot/server exec tsx ../../scripts/net-smoke.ts"
+    "smoke:server": "corepack pnpm -F @DoShoot/server smoke",
+    "smoke:net": "corepack pnpm -F @DoShoot/server exec tsx ../../scripts/net-smoke.ts"
   },
   "devDependencies": {
     "socket.io-client": "4.8.4"

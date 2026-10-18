@@ -14,7 +14,7 @@ import {
   type SnapshotMsg,
   type WeaponId,
   type WelcomeMsg,
-} from '@deadshot/shared';
+} from '@DoShoot/shared';
 import { GameScene } from './scene';
 import { INTERP_DELAY, LocalPlayer, RemoteEntity } from './entities';
 import type { InputCommand } from './input';

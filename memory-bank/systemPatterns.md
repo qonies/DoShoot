@@ -44,7 +44,7 @@ scripts/net-smoke.ts  # 集成冒烟：2 模拟客户端验证进房/移动/快�
 
 ## 目录结构（已定稿 monorepo）
 ```
-DeadShot/
+DoShoot/
 ├─ packages/shared/    # 数值、地图、协议、碰撞
 ├─ apps/client/        # Vite + Three.js
 ├─ apps/server/        # Node + Socket.IO

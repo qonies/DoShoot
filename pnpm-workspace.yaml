@@ -2,5 +2,6 @@ packages:
   - apps/*
   - packages/*
 
-onlyBuiltDependencies:
-  - esbuild
+allowBuilds:
+  # esbuild 的 postinstall 需显式许可（pnpm 12：onlyBuiltDependencies 已被 allowBuilds 取代）
+  esbuild: true

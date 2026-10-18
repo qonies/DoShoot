@@ -24,7 +24,7 @@ import {
   type ShotTarget,
   type SnapshotMsg,
   type WelcomeMsg,
-} from '@deadshot/shared';
+} from '@DoShoot/shared';
 import type { Server } from 'socket.io';
 import { BOT_EXTRA_SPREAD, BOT_SPEED_FACTOR, updateBotAI } from './bot';
 
