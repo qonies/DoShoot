@@ -53,5 +53,5 @@
   "net.connectFailed": "无法连接服务器，请确认服务端已启动（corepack pnpm dev:server）",
   "net.versionMismatch": "客户端版本不一致，请刷新页面",
   "net.roomFull": "房间已满，请稍后再试",
-  "net.disconnected": "与服务器的连接已断开"
+  "net.disconnected": "与服务器的连接已断开（30 秒内重新开始可回到对局）"
 }

@@ -92,8 +92,10 @@ function clampUnit(v: number): number {
 export class Room {
   readonly id: string;
   readonly mapId: string;
-  /** 房间创建时刻（FR-N6 空房回收用） */
+  /** 房间创建时刻 */
   readonly createdAt = Date.now();
+  /** 房间变为空（无真人玩家）的时刻（FR-N6：空房 60s 后回收的计时基准）；null = 非空 */
+  emptySince: number | null = null;
   private readonly fighters = new Map<string, SimFighter>();
   private readonly inputs = new Map<string, InputMsg[]>();
   private botSeq = 0;
@@ -162,12 +164,14 @@ export class Room {
     this.fighters.set(id, f);
     this.inputs.set(id, []);
     this.adjustBots();
+    this.emptySince = null;
   }
 
   removePlayer(id: string): void {
     this.fighters.delete(id);
     this.inputs.delete(id);
     this.adjustBots();
+    if (this.playerCount === 0) this.emptySince = Date.now(); // FR-N6：从变空时刻起计时
   }
 
   /** 断线（FR-N5）：保留实体进入宽限期，输入清零（残影原地站立，仍可被命中） */

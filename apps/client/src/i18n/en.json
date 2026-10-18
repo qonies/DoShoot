@@ -53,5 +53,5 @@
   "net.connectFailed": "Cannot connect to server — make sure it is running (corepack pnpm dev:server)",
   "net.versionMismatch": "Client version mismatch — please refresh the page",
   "net.roomFull": "Room is full, try again later",
-  "net.disconnected": "Disconnected from server"
+  "net.disconnected": "Disconnected from server (restart within 30s to rejoin the match)"
 }

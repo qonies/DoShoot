@@ -202,15 +202,18 @@ async function run(): Promise<void> {
       } satisfies InputMsg);
     };
     const died = (): boolean => meAt()?.alive === false;
-    /** 轮询等待 pred，等待期间被击杀立即以 'dead' 中断（区别于超时，供上层重试） */
+    /** 轮询等待 pred，等待期间被击杀立即以 'dead' 中断（区别于超时，供上层重试）。
+     *  「先活后死」才视为被击杀——等待复活的等待（起始即死亡）不被误判，否则重试永远等不到重生。 */
     const waitForAlive = async (pred: () => boolean, timeoutMs: number): Promise<'ok' | 'dead' | 'timeout'> => {
       const deadline = Date.now() + timeoutMs;
+      let wasAlive = false;
       while (Date.now() < deadline) {
-        if (died()) return 'dead';
+        if (meAt()?.alive === true) wasAlive = true;
+        if (wasAlive && died()) return 'dead';
         if (pred()) return 'ok';
         await sleep(50);
       }
-      return died() ? 'dead' : pred() ? 'ok' : 'timeout';
+      return pred() ? 'ok' : 'timeout';
     };
 
     let fireReloadOk = false;

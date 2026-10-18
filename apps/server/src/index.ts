@@ -91,12 +91,12 @@ class RoomManager {
     );
   }
 
-  /** 空房间回收（FR-N6）：无真人玩家超过 ROOM_RECYCLE_MS 则销毁（断线宽限期内的玩家仍计入） */
+  /** 空房间回收（FR-N6）：空置超过 ROOM_RECYCLE_MS 则销毁（计时基准 = 最后一名真人移除时刻；断线宽限期内的玩家仍计入） */
   sweep(): void {
     const now = Date.now();
     for (let i = this.rooms.length - 1; i >= 0; i--) {
       const r = this.rooms[i]!;
-      if (r.playerCount === 0 && now - r.createdAt > ROOM_RECYCLE_MS) {
+      if (r.emptySince !== null && now - r.emptySince > ROOM_RECYCLE_MS) {
         r.destroy();
         this.rooms.splice(i, 1);
         console.log(`[server] room recycled: ${r.id} (${r.mapId})`);

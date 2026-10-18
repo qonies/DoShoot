@@ -22,6 +22,8 @@ corepack pnpm dev:client  # 客户端开发服务器 (http://localhost:5173，so
 corepack pnpm dev:server  # 服务端 (http://localhost:3000)
 corepack pnpm typecheck   # 全量 TS 检查
 corepack pnpm build       # 全量构建
+corepack pnpm smoke:server # 服务端自检（启动 → /health 自检 → 自动退出）
+corepack pnpm smoke:net    # 网络集成冒烟（临时服务器 + 2 模拟客户端，ALL PASS 自动退出）
 ```
 
 ## 局域网联机（免 Vite）

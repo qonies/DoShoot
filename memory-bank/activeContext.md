@@ -1,7 +1,17 @@
 # 活动上下文（Active Context）
 
 ## 当前焦点
-**M3 系统完整已完成并通过冒烟验收** — 下一步进入 M4 打磨完善。
+**M3 已提交（feat(M3) d33c016）+ 体检问题修复落地** — 下一步进入 M4 打磨完善（FR-N4 延迟补偿回溯已在需求中明确后置 M4）。
+
+## 最近变更（2026-10-18 · 体检问题修复）
+- **P1 M3 全部工作补提交**：此前 23 个修改文件 + `audio.ts`（整个 M3）全部未提交、HEAD 停在 v0.2.5——先原样提交为 `feat(M3)`（d33c016），再在其上落修复 commit
+- **P2 客户端断线死路（已修复）**：`main.ts` onDisconnected 的 inGame 分支原只停循环 + 关 socket + 提示，不回大厅也无重连路径 → 卡死在冻结画面（rejoinId 只能靠手动刷新触发）。补 `backToLobby()`：回大厅后 30s 宽限内点「开始游戏」即凭 rejoinId 回原对局；`net.disconnected` 中英文案补充重连提示
+- **P2 冒烟 waitForAlive 重试盲区（已修复，实测复现）**：fire/reload 重试的「等待复活」复用带死亡检测的 `waitForAlive`，但起始即死亡（等 2.5s 重生）时首轮 `died()` 即真 → 返回 'dead' → break 直接判负——即「断言期间被击杀一次必失败」。改为「先活后死」才中断（wasAlive 标记）；修复前实测失败一次，修复后连续 3 轮 ALL PASS
+- **P2 FR-N4 延迟补偿文档/实现不一致（已修复）**：requirements FR-N4 与 §7.3 原描述「服务端保存 ~1s 实体历史回溯判定」，代码无任何 history/rewind 实现（命中按当前位置）——三处改为明确「后置 M4，尚未实现」（决策 #10），v0.3.0 头部简化项同步补充
+- **P3 地图下拉 i18n 切换不刷新（已修复）**：`main.ts` 动态填充的地图 `<option>` 只写 textContent 无 `data-i18n`，切语言后 applyDom 不覆盖 → 补 `opt.dataset.i18n = m.nameKey`（FR-L6/NFR-9）
+- **P4 空房回收语义对齐 FR-N6（已修复）**：`sweep()` 原用 `now - createdAt > 60s`（创建 60s 后一旦空即回收），改为 Room 新增 `emptySince`（addPlayer 清空 / removePlayer 且 playerCount=0 时置位），以「变空时刻」起算
+- **P4 收尾**：子包版本号 0.2.5 → 0.3.0（对齐根 package.json 与 requirements v0.3.0）；README 补 smoke:server / smoke:net 命令；删除遗留 `sv_out.log`
+- 验证：typecheck 全过 / build 成功（gzip 147.27KB）/ smoke:server 通过（protocol v2 + dist served）/ smoke:net 连续 3 轮 ALL PASS
 
 ## 最近变更（2026-10-18 · M3 系统完整）
 - **武器解锁成长（FR-W1/W4/A1/B5）**：`weapons.ts` 新增 `WEAPON_TIERS`（每类 3 级链：T1→T2@8杀→T3@20杀，id 保持类 id、仅数值/名称升级，含 T3 自动霰弹枪等 12 个新数值变体）+ `tierForKills`/`specForTier`；`inventory.ts` 支持 `tierSpecs` 覆盖（`setTierSpec` 对当前武器奖励满新弹匣、`resetAll` 保留层级）；服务端 `registerKill` 按类计数并跨阈值广播 `unlock` 事件（Bot 击杀同计入 FR-B5）；进房 `progress` 基线（localStorage `DoShoot.progress`）在 `applyProgress` 中恢复层级；客户端 `world.ts` 收 unlock 事件同步层级 + 全屏解锁横幅 + 琶音音效

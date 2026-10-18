@@ -47,6 +47,7 @@ mapSelect.replaceChildren(
   ...Object.values(MAPS).map((m) => {
     const opt = document.createElement('option');
     opt.value = m.id;
+    opt.dataset.i18n = m.nameKey; // 挂 data-i18n：切换语言时 applyDom 同步刷新（FR-L6/NFR-9）
     opt.textContent = t(m.nameKey);
     return opt;
   }),
@@ -120,7 +121,8 @@ function startGame(kind: 'quick' | 'map'): void {
         inGame = false;
         stopGameLoop?.();
         stopGameLoop = null;
-        net.close(); // 阻止 socket.io 自动重连产生孤儿连接（FR-N5 重连留 M3）
+        net.close(); // 阻止 socket.io 自动重连产生孤儿连接
+        backToLobby(); // 修复断线死路：回大厅后 30s 宽限内重新开始可凭 rejoinId 回原对局（FR-N5）
         showNetMsg('net.disconnected');
       } else if (connecting) {
         // 建连后、welcome 前断开（如服务端恰在进房握手时重启）：socket.io 会自动重连
