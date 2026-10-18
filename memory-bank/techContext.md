@@ -18,7 +18,11 @@
 - 服务端：socket.io 4.8.4、tsx ^4.19（dev 直跑 TS）
 - workspace 根 devDeps：socket.io-client 4.8.4（供 `scripts/net-smoke.ts` 集成冒烟）
 - 共享包：`packages/shared`（TS 源码形式被两端直接引用，main/types 指向 src/index.ts）
-- pnpm 12 注意：esbuild 的 postinstall 脚本需在 `pnpm-workspace.yaml` 的 `onlyBuiltDependencies` 中显式许可（当前唯一许可项为 esbuild）
+- pnpm 12 注意：esbuild 的 postinstall 需显式许可，**pnpm 12 用 `pnpm-workspace.yaml` 的 `allowBuilds`（包名→布尔映射），旧字段 `onlyBuiltDependencies` 已失效**（否则 install 报 ERR_PNPM_IGNORED_BUILDS 退出码 1）
+
+## 仓库与凭据（2026-10-18）
+- GitHub：`qonies/DoShoot`（私有），remote origin 已配置，主分支 main
+- 凭据助手配置在**仓库本地**：`git config credential.helper "!gh auth git-credential"`（gh CLI 已登录 qonies；本机 HOME 指向 `/home/redacted` 导致 gh 无法写全局 .gitconfig，故用仓库级配置）
 
 ## 环境与命令（2026-10-18 实测可用）
 - Windows + PowerShell；Node v24.13.0；pnpm 经 corepack 调用：`corepack pnpm <cmd>`（pnpm 不在 PATH）
