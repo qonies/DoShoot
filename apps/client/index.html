@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DeadShot</title>
+  </head>
+  <body>
+    <canvas id="game"></canvas>
+
+    <!-- HUD（FR-U1/U4：DOM 分层，游戏世界用 Three.js） -->
+    <div id="hud" class="hidden">
+      <div id="fps">-- FPS</div>
+      <div id="hint"></div>
+    </div>
+
+    <!-- 大厅（FR-L1/L2/L3/L5/L6） -->
+    <div id="lobby">
+      <div class="panel">
+        <h1>DeadShot</h1>
+        <label>
+          <span data-i18n="nickname"></span>
+          <input id="nickname" maxlength="16" autocomplete="off" />
+        </label>
+        <label>
+          <span data-i18n="mode"></span>
+          <select id="mode">
+            <option value="ffa">FFA</option>
+            <option value="tdm" disabled data-i18n="modeTdm">TDM (V2)</option>
+            <option value="hardpoint" disabled data-i18n="modeHardpoint">Hardpoint (V2)</option>
+          </select>
+        </label>
+        <label>
+          <span data-i18n="map"></span>
+          <select id="map"><option value="range"></option></select>
+        </label>
+        <div class="buttons">
+          <button id="quickJoin"></button>
+          <button id="start" class="primary"></button>
+        </div>
+        <button id="langBtn" class="lang"></button>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

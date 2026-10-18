@@ -1,0 +1,14 @@
+{
+  "title": "DeadShot",
+  "nickname": "昵称",
+  "mode": "模式",
+  "map": "地图",
+  "quickJoin": "快速加入",
+  "start": "开始游戏",
+  "lang": "中文 / English",
+  "hint": "WASD 移动 · 鼠标瞄准 · 左键射击",
+  "randomName": "玩家",
+  "modeTdm": "TDM (V2)",
+  "modeHardpoint": "Hardpoint (V2)",
+  "map.range": "靶场"
+}

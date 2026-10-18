@@ -1,0 +1,14 @@
+{
+  "title": "DeadShot",
+  "nickname": "Nickname",
+  "mode": "Mode",
+  "map": "Map",
+  "quickJoin": "Quick Join",
+  "start": "Start Game",
+  "lang": "中文 / English",
+  "hint": "WASD to move · Mouse to aim · LMB to shoot",
+  "randomName": "Player",
+  "modeTdm": "TDM (V2)",
+  "modeHardpoint": "Hardpoint (V2)",
+  "map.range": "Range"
+}
