@@ -22,7 +22,7 @@
 
 ## 仓库与凭据（2026-10-18）
 - GitHub：`qonies/DoShoot`（私有），remote origin 已配置，主分支 main
-- 凭据助手配置在**仓库本地**：`git config credential.helper "!gh auth git-credential"`（gh CLI 已登录 qonies；本机 HOME 指向 `/home/redacted` 导致 gh 无法写全局 .gitconfig，故用仓库级配置）
+- 凭据助手配置在**仓库本地**：`git config credential.helper "!gh auth git-credential"`（gh CLI 已登录 qonies；本机 HOME 指向自定义目录导致 gh 无法写全局 .gitconfig，故用仓库级配置）
 
 ## 环境与命令（2026-10-18 实测可用）
 - Windows + PowerShell；Node v24.13.0；pnpm 经 corepack 调用：`corepack pnpm <cmd>`（pnpm 不在 PATH）
