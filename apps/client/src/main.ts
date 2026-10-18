@@ -11,13 +11,15 @@ import {
   type WelcomeMsg,
   type WeaponId,
 } from '@DoShoot/shared';
-import { applyDom, getLang, t, toggleLang } from './i18n';
+import { applyDom, getLang, setLang, t, toggleLang } from './i18n';
 import { GameScene } from './game/scene';
 import { NetWorld } from './game/world';
 import { Input } from './game/input';
 import { Hud } from './game/hud';
 import { Net } from './game/net';
 import { sfx } from './game/audio';
+import { Minimap } from './game/minimap';
+import { applyAudioSettings, loadSettings, saveSettings, type GameSettings } from './settings';
 
 const NICKNAME_KEY = 'DoShoot.nickname';
 const PROGRESS_KEY = 'DoShoot.progress';
@@ -27,6 +29,10 @@ const INPUT_SEND_RATE = 30;
 
 // ---------- i18n 与大厅 ----------
 applyDom();
+
+// 设置（FR-L5，M4）：音量/BGM 即时应用（AudioContext 未建时由 sfx 暂存）；画质需场景，进对局时应用
+const settings = loadSettings();
+applyAudioSettings(settings);
 
 const langBtn = document.querySelector<HTMLButtonElement>('#langBtn')!;
 langBtn.textContent = getLang() === 'zh' ? 'EN' : '中文';
@@ -153,6 +159,7 @@ function startGame(kind: 'quick' | 'map'): void {
 }
 
 function backToLobby(): void {
+  document.querySelector('#settings')!.classList.add('hidden'); // 防止残留打开状态带入下一局
   document.querySelector('#lobby')!.classList.remove('hidden');
   document.querySelector('#hud')!.classList.add('hidden');
 }
@@ -168,6 +175,8 @@ function runGameLoop(net: Net, welcome: WelcomeMsg): () => void {
   const canvas = document.querySelector<HTMLCanvasElement>('#game')!;
   const map = getMap(welcome.mapId) ?? DEFAULT_MAP;
   const gameScene = new GameScene(canvas, map);
+  gameScene.setQuality(settings.quality); // 画质分档（FR-L5，M4）
+  const minimap = new Minimap(document.querySelector<HTMLCanvasElement>('#minimap')!, map);
   const hud = new Hud();
   const world = new NetWorld(gameScene, map, {
     onKill: (killer, victim, weaponId) => hud.addKillFeed(killer, victim, weaponId),
@@ -223,6 +232,45 @@ function runGameLoop(net: Net, welcome: WelcomeMsg): () => void {
   document.querySelector('#rematchBtn')!.addEventListener('click', onRematch);
   document.querySelector('#leaveBtn')!.addEventListener('click', onLeave);
 
+  // 设置面板（FR-L5，M4）：Esc 开关，改动即时生效并持久化
+  const settingsEl = document.querySelector<HTMLDivElement>('#settings')!;
+  const volumeSlider = document.querySelector<HTMLInputElement>('#setVolume')!;
+  const bgmSlider = document.querySelector<HTMLInputElement>('#setBgm')!;
+  const qualitySel = document.querySelector<HTMLSelectElement>('#setQuality')!;
+  const langSel = document.querySelector<HTMLSelectElement>('#setLang')!;
+  const syncSettingsUi = (): void => {
+    volumeSlider.value = `${Math.round(settings.volume * 100)}`;
+    bgmSlider.value = `${Math.round(settings.bgm * 100)}`;
+    qualitySel.value = settings.quality;
+    langSel.value = getLang();
+  };
+  syncSettingsUi();
+  const onEsc = (e: KeyboardEvent): void => {
+    if (e.key !== 'Escape') return;
+    syncSettingsUi();
+    settingsEl.classList.toggle('hidden');
+  };
+  window.addEventListener('keydown', onEsc);
+  document.querySelector('#setClose')!.addEventListener('click', () => settingsEl.classList.add('hidden'));
+  volumeSlider.addEventListener('input', () => {
+    settings.volume = Number(volumeSlider.value) / 100;
+    applyAudioSettings(settings);
+    saveSettings(settings);
+  });
+  bgmSlider.addEventListener('input', () => {
+    settings.bgm = Number(bgmSlider.value) / 100;
+    applyAudioSettings(settings);
+    saveSettings(settings);
+  });
+  qualitySel.addEventListener('change', () => {
+    settings.quality = qualitySel.value as GameSettings['quality'];
+    gameScene.setQuality(settings.quality);
+    saveSettings(settings);
+  });
+  langSel.addEventListener('change', () => {
+    setLang(langSel.value as 'zh' | 'en'); // i18n 模块持久化 + applyDom（含小地图外的全部 data-i18n）
+  });
+
   let last = performance.now();
   let inputAcc = 0;
   let fpsFrames = 0;
@@ -273,6 +321,7 @@ function runGameLoop(net: Net, welcome: WelcomeMsg): () => void {
 
     gameScene.update(dt);
     gameScene.follow(world.local.x, world.local.y);
+    minimap.update(world.local.x, world.local.y, world.local.angle); // 小地图（FR-U2，M4）
     gameScene.render();
 
     fpsFrames++;
@@ -299,6 +348,7 @@ function runGameLoop(net: Net, welcome: WelcomeMsg): () => void {
     gameScene.dispose();
     window.removeEventListener('keydown', onTabDown);
     window.removeEventListener('keyup', onTabUp);
+    window.removeEventListener('keydown', onEsc);
     document.querySelector('#rematchBtn')!.removeEventListener('click', onRematch);
     document.querySelector('#leaveBtn')!.removeEventListener('click', onLeave);
   };

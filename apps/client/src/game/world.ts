@@ -306,11 +306,13 @@ export class NetWorld {
           sfx.hurt();
         }
       } else if (ev.type === 'shot') {
-        // 远端开火曳光 + 按距离衰减的枪声（本地玩家的开火由预测即时表现）
+        // 远端开火曳光 + 按距离衰减/方位声像的枪声（本地玩家的开火由预测即时表现，FR-S2）
         if (ev.id === this.localId) continue;
         const o = ev.segments[0];
         const dist = o ? Math.hypot(o[0] - this.local.x, o[1] - this.local.y) : 0;
-        sfx.shoot(ev.weaponId, dist);
+        // 空间声像（FR-S2，M4）：声源相对方位 → 左右 pan（正交俯视相机下屏幕右 ≈ 世界 +x）
+        const pan = o && dist > 0.5 ? Math.max(-1, Math.min(1, (o[0] - this.local.x) / dist)) : 0;
+        sfx.shoot(ev.weaponId, dist, pan);
         for (const s of ev.segments) this.tracers.spawn(s[0], s[1], s[2], s[3]);
       } else if (ev.type === 'unlock') {
         if (ev.id !== this.localId) continue;

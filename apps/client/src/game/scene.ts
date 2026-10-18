@@ -114,6 +114,23 @@ export class GameScene {
     this.shake = Math.min(0.6, this.shake + amount);
   }
 
+  /** 画质分档（FR-L5，M4）：高 = 原生 DPR（≤2）+ 阴影；中 = DPR 1 + 阴影；低 = DPR 1 + 无阴影 */
+  setQuality(q: 'low' | 'medium' | 'high'): void {
+    this.renderer.setPixelRatio(q === 'high' ? Math.min(window.devicePixelRatio, 2) : 1);
+    const shadows = q !== 'low';
+    if (this.dirLight.castShadow !== shadows) {
+      this.dirLight.castShadow = shadows;
+      // 阴影开关变化需重编译材质程序
+      this.scene.traverse((o) => {
+        if (o instanceof THREE.Mesh) {
+          const m = o.material as THREE.Material | THREE.Material[];
+          if (Array.isArray(m)) m.forEach((mat) => (mat.needsUpdate = true));
+          else m.needsUpdate = true;
+        }
+      });
+    }
+  }
+
   /** 每帧推进震动衰减 */
   update(dt: number): void {
     this.shake = Math.max(0, this.shake - dt * 2.2);

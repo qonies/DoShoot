@@ -40,3 +40,9 @@ export const MATCH_TIME_LIMIT = 300;
 export const RECONNECT_GRACE = 30;
 /** 空房间回收（毫秒，FR-N6） */
 export const ROOM_RECYCLE_MS = 60_000;
+
+/** 远端实体插值缓冲延迟（秒，FR-N3）：客户端 entities.ts 同源消费，也是 M4 延迟补偿回溯的基准分量 */
+export const INTERP_DELAY = 0.1;
+/** 延迟补偿（FR-N4，M4）：服务端实体位置历史时长（秒）与单次回溯上限（秒） */
+export const LAG_COMP_HISTORY = 1;
+export const LAG_COMP_MAX_REWIND = 0.4;

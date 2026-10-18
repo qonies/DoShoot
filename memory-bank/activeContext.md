@@ -1,7 +1,18 @@
 # 活动上下文（Active Context）
 
 ## 当前焦点
-**M3 已提交（feat(M3) d33c016）+ 体检问题修复落地** — 下一步进入 M4 打磨完善（FR-N4 延迟补偿回溯已在需求中明确后置 M4）。
+**M4 打磨完善已落地（协议仍 v2，增量兼容）** — 待用户局域网多设备实测验收（60 FPS / 双机开黑 / 平衡性反馈）。
+
+## 最近变更（2026-10-18 · M4 打磨完善）
+- **FR-N4 延迟补偿回溯（M4 旗舰项）**：`room.ts` SimFighter 新增 `hist`（每 tick 位置记录，容量 ≈LAG_COMP_HISTORY=1s）与 `pingMs`（输入消费时钳制更新 ≤500）；`processFire` 命中判定按「插值延迟 100ms + 半程 RTT」回溯（上限 LAG_COMP_MAX_REWIND=400ms；Bot 索敌用现位置故回溯为 0），hit 事件坐标 = 回溯位置（与射击者所见一致）；`net.ts` 建连后 ping/pong 每 2s 测 RTT（EWMA 0.7/0.3 平滑）随输入上报；协议仅增量可选字段（`InputMsg.pingMs` + PingMsg/PongMsg），PROTOCOL_VERSION 保持 2，新旧前后端互相兼容
+- **FR-U2 小地图**：新增 `game/minimap.ts`（150×150 canvas，墙体预渲染底图每局一张，每帧只画自己三角朝向；世界观 y 向下与 canvas 一致）；`index.html` #minimap + style.css；不显示敌人（对标原作）
+- **FR-L5 设置界面**：新增 `settings.ts`（音量/BGM/画质/语言，localStorage `DoShoot.settings`）+ Esc 开关面板（#settings，pointer-events 局部恢复交互）；画质三档 `scene.setQuality`（高=原生 DPR≤2+阴影 / 中=DPR1+阴影 / 低=DPR1 无阴影，切换时材质 needsUpdate 重编译）；鼠标灵敏度项因 V1 绝对指针瞄准不适用（需求 v0.3.1 说明）；backToLobby 时关面板防残留
+- **FR-S2/S3 音频增强**：`audio.ts` `shoot` 增加方位声像 pan（StereoPanner，不支持时静默降级；`world.ts` 按 (sx-lx)/dist 计算，正交俯视相机下屏幕右≈世界 +x）；新增合成 BGM（A 小调 pad 4 音轻微失谐 + 低通 0.05Hz 慢扫，独立 bgmGain 通道，ensure() 首次交互启动，音量 0..1×0.25 刻度）
+- **内部压测（NFR-3）**：新增 `scripts/load-test.ts`（子进程起真实服务端 [node+tsx 直接跑绕过 pnpm 生命周期，不触发 smoke 自检] + N 模拟客户端 30Hz 随机输入/20% 开火，统计进房/快照率/带宽/断线，win32 用 taskkill /T /F 收尾）；实测 **PASS**——50/50 进房、快照 avg/min 均 26.8/s、单快照 ~2.2KB、单客户端下行 ~59KB/s（全服 ~2.9MB/s）、0 意外断线；决策 #8 据此维持 JSON 编码
+- **i18n 校对（NFR-9）**：新增 `scripts/i18n-check.ts`（zh/en 键集一致 + 代码 t()/data-i18n 静态引用覆盖 + weapon.*/map.* 动态键核对）；根脚本 `check:i18n`，实测 OK（64 键一致 / 37 静态引用全覆盖）
+- **部署文档**：README 局域网部署详细步骤（build/启动、ipconfig、netsh 防火墙放行 3000、多设备加入、排错）+ 质量检查命令（typecheck/check:i18n/loadtest）
+- **平衡性**：数值未盲调（无实测数据），待局域网开黑反馈后调参——需求 v0.3.1 已注明
+- 验证：typecheck 全过 / build 成功（gzip 148.9KB）/ smoke:server 通过 / smoke:net 连续 2 轮 ALL PASS / check:i18n OK / loadtest PASS（50 客户端 × 30s）
 
 ## 最近变更（2026-10-18 · 体检问题修复）
 - **P1 M3 全部工作补提交**：此前 23 个修改文件 + `audio.ts`（整个 M3）全部未提交、HEAD 停在 v0.2.5——先原样提交为 `feat(M3)`（d33c016），再在其上落修复 commit

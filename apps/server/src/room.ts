@@ -3,6 +3,9 @@
 import {
   BOT_FILL_MAX,
   HITBOX_HALF,
+  INTERP_DELAY,
+  LAG_COMP_HISTORY,
+  LAG_COMP_MAX_REWIND,
   MATCH_KILL_TARGET,
   MATCH_TIME_LIMIT,
   PLAYER_HP,
@@ -82,6 +85,10 @@ export interface SimFighter {
   wanderUntil: number;
   wanderSince: number;
   nextFireAt: number;
+  /** 客户端最近 RTT（ms，延迟补偿回溯 FR-N4 用；Bot 恒 0） */
+  pingMs: number;
+  /** 位置历史（延迟补偿回溯，M4）：每 tick 记录，容量 ≈ LAG_COMP_HISTORY 秒 */
+  hist: Array<{ t: number; x: number; y: number }>;
 }
 
 function clampUnit(v: number): number {
@@ -319,6 +326,9 @@ export class Room {
         // 记录已消费 seq（客户端和解 ack，FR-N4）：仅接受单调递增的合法数值
         const seq = Math.floor(Number(msg.seq));
         if (Number.isFinite(seq) && seq > f.lastSeq) f.lastSeq = seq;
+        // 射击者 RTT（延迟补偿回溯 FR-N4，M4）：钳制到合理区间
+        const ping = Math.floor(Number(msg.pingMs) || 0);
+        if (Number.isFinite(ping) && ping >= 0) f.pingMs = Math.min(500, ping);
       }
       q.length = 0;
     }
@@ -367,6 +377,14 @@ export class Room {
       f.bloom = Math.max(0, f.bloom - BLOOM_DECAY * dt);
     }
 
+    // 5.5 位置历史（延迟补偿 FR-N4，M4）：每 tick 记录，供命中判定按射击者视角回溯
+    const histMax = Math.ceil(LAG_COMP_HISTORY / TICK_DT);
+    for (const f of all) {
+      if (!f.alive) continue;
+      f.hist.push({ t: now, x: f.x, y: f.y });
+      if (f.hist.length > histMax) f.hist.shift();
+    }
+
     // 6. 对局结束判定（FR-M1：先到 MATCH_KILL_TARGET 杀或时限）
     if (!this.matchOver) {
       const timeUp = now - this.matchStart >= MATCH_TIME_LIMIT;
@@ -397,7 +415,7 @@ export class Room {
     this.io.to(this.id).emit('snapshot', snapshot);
   }
 
-  /** 处理一次开火意图：弹药/冷却校验 → 弹丸解算 → 伤害/击杀结算 → 事件 */
+  /** 处理一次开火意图：弹药/冷却校验 → 延迟补偿回溯 → 弹丸解算 → 伤害/击杀结算 → 事件 */
   private processFire(f: SimFighter, now: number, moving: boolean, events: GameEvent[]): void {
     const spec = f.inv.spec;
     const wantFire = spec.fireMode === 'auto' ? f.input.firing : f.firePresses > 0;
@@ -418,17 +436,32 @@ export class Room {
       f.bloom +
       (f.bot ? BOT_EXTRA_SPREAD : 0);
 
+    // 延迟补偿回溯（FR-N4，M4）：玩家瞄准的是 ~INTERP_DELAY 前的插值影像 + 半程 RTT，
+    // 命中判定把目标回溯到射击者视角时刻；Bot 以当前位置索敌（findTarget），回溯为 0
+    const rewind = f.bot ? 0 : Math.min(LAG_COMP_MAX_REWIND, INTERP_DELAY + f.pingMs / 2000);
+    const rewindT = now - rewind;
+    const posAt = (o: SimFighter): { x: number; y: number } => {
+      const h = o.hist;
+      for (let i = h.length - 1; i >= 0; i--) {
+        if (h[i]!.t <= rewindT) return h[i]!;
+      }
+      return h.length > 0 ? h[0]! : o;
+    };
+
     const list: SimFighter[] = [];
+    const rewound: Array<{ x: number; y: number }> = [];
     const targets: ShotTarget[] = [];
     for (const o of this.fighters.values()) {
       if (o === f || !o.alive) continue;
+      const rp = posAt(o);
       list.push(o);
+      rewound.push(rp);
       targets.push({
         hitbox: {
-          minX: o.x - HITBOX_HALF,
-          minY: o.y - HITBOX_HALF,
-          maxX: o.x + HITBOX_HALF,
-          maxY: o.y + HITBOX_HALF,
+          minX: rp.x - HITBOX_HALF,
+          minY: rp.y - HITBOX_HALF,
+          maxX: rp.x + HITBOX_HALF,
+          maxY: rp.y + HITBOX_HALF,
         },
         alive: true,
       });
@@ -444,6 +477,7 @@ export class Room {
       if (p.hitIndex === null) continue;
       const victim = list[p.hitIndex]!;
       if (!victim.alive) continue; // 同次开火先前弹丸已击杀
+      const rp = rewound[p.hitIndex]!; // 命中反馈位置 = 回溯位置（与射击者所见一致）
       const dmg = damageAtRange(spec, p.dist);
       victim.hp = Math.max(0, victim.hp - dmg);
       const killed = victim.hp <= 0;
@@ -453,8 +487,8 @@ export class Room {
         targetId: victim.id,
         dmg,
         killed,
-        x: victim.x,
-        y: victim.y,
+        x: rp.x,
+        y: rp.y,
       });
       if (killed) {
         victim.alive = false;
@@ -535,6 +569,8 @@ export class Room {
       wanderUntil: 0,
       wanderSince: 0,
       nextFireAt: 0,
+      pingMs: 0,
+      hist: [],
     };
   }
 

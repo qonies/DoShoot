@@ -1,10 +1,9 @@
 /** 网络实体渲染：远端玩家/Bot 快照缓冲插值（FR-N3 ~100ms），本地玩家预测表现（FR-N4） */
 
 import * as THREE from 'three';
-import type { EntitySnapshot, WeaponId } from '@DoShoot/shared';
+import { INTERP_DELAY, type EntitySnapshot, type WeaponId } from '@DoShoot/shared';
 
-/** 插值缓冲延迟（秒，FR-N3） */
-export const INTERP_DELAY = 0.1;
+export { INTERP_DELAY };
 const BUFFER_TTL = 1.0;
 
 /** 战斗实体网格（玩家与 Bot 共用造型，M1 延续） */

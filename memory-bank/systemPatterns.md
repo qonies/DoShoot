@@ -39,10 +39,12 @@ apps/client/src/game/
 ├─ entities.ts   # RemoteEntity 快照缓冲插值(~100ms, FR-N3) + LocalPlayer 预测表现
 ├─ world.ts      # NetWorld：本地预测 + 快照和解(seq ack + 输入重放) + 事件分发（unlock/matchEnd/进度持久化回调）
 ├─ hud.ts        # HUD + 计分板(Tab)/结算面板/解锁横幅/对局倒计时（M3 扩展）
+├─ minimap.ts    # 小地图（FR-U2，M4）：墙体预渲染底图 + 自己位置/朝向（不显示敌人）
+├─ (src/settings.ts) # 设置持久化（FR-L5，M4）：音量/BGM/画质/语言 → localStorage + Esc 面板
 ├─ weapons(→shared) / input.ts  # 输入同 M1
 scripts/net-smoke.ts  # 集成冒烟：按地图惰性建房模拟服务端 + 模拟客户端验证进房/移动/快照/重连/双地图（corepack pnpm smoke:net）
 ```
-- **同步策略现状**：30Hz accumulator 模拟 + 按唤醒频率 22~30Hz 全量快照广播（JSON）；本地玩家预测 + 和解（seq ack + 未确认输入重放），远端 ~100ms 插值；延迟补偿回溯按决策 #10 后置
+- **同步策略现状**：30Hz accumulator 模拟 + 按唤醒频率 22~30Hz 全量快照广播（JSON）；本地玩家预测 + 和解（seq ack + 未确认输入重放），远端 ~100ms 插值；**延迟补偿回溯（M4）**：服务端 ~1s 位置历史，命中按「插值延迟 + 半程 RTT」回溯（ping/pong 测 RTT，Bot 回溯为 0）；快照 JSON 编码经压测维持（50 客户端 26.8/s、~59KB/s/端，决策 #8）
 
 ## 目录结构（已定稿 monorepo）
 ```

@@ -36,9 +36,19 @@ export interface InputMsg {
   firePressed: number;
   reload: boolean;
   switchTo: WeaponId | null;
+  /** 客户端最近平滑 RTT（ms，M4 延迟补偿回溯用；缺省按 0 处理。增量可选字段，协议 v2 兼容） */
+  pingMs?: number;
 }
 
 // ---------- S2C ----------
+
+/** 延迟测量（M4，FR-N4）：客户端定期发 PingMsg，服务端原样回 PongMsg，客户端据此计算 RTT */
+export interface PingMsg {
+  t: number;
+}
+export interface PongMsg {
+  t: number;
+}
 
 /** 快照中的单个实体状态（JSON 起步，必要时切二进制，见决策 #8） */
 export interface EntitySnapshot {

@@ -11,6 +11,7 @@
     <!-- HUD（FR-U1/U4：DOM 分层；M1 新增血条/弹药/换弹/击杀流/准星/重生界面） -->
     <div id="hud" class="hidden">
       <div id="fps">-- FPS</div>
+      <canvas id="minimap" width="150" height="150"></canvas>
       <div id="hint"></div>
       <div id="topbar">
         <span data-i18n="hud.kills"></span>
@@ -57,6 +58,30 @@
             <button id="leaveBtn" data-i18n="settle.leave"></button>
             <button id="rematchBtn" class="primary" data-i18n="settle.rematch"></button>
           </div>
+        </div>
+      </div>
+      <!-- 设置面板（FR-L5，M4）：Esc 开关；改动即时生效并持久化 -->
+      <div id="settings" class="hidden">
+        <div class="panel">
+          <h2 data-i18n="set.title"></h2>
+          <label><span data-i18n="set.volume"></span><input id="setVolume" type="range" min="0" max="100" step="1" /></label>
+          <label><span data-i18n="set.bgm"></span><input id="setBgm" type="range" min="0" max="100" step="1" /></label>
+          <label>
+            <span data-i18n="set.quality"></span>
+            <select id="setQuality">
+              <option value="low" data-i18n="set.qLow"></option>
+              <option value="medium" data-i18n="set.qMed"></option>
+              <option value="high" data-i18n="set.qHigh"></option>
+            </select>
+          </label>
+          <label>
+            <span data-i18n="set.lang"></span>
+            <select id="setLang">
+              <option value="zh">中文</option>
+              <option value="en">English</option>
+            </select>
+          </label>
+          <button id="setClose" data-i18n="set.close"></button>
         </div>
       </div>
       <div id="vignette"></div>

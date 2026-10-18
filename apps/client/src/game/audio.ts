@@ -8,6 +8,9 @@ class Sfx {
   private master: GainNode | null = null;
   private noise: AudioBuffer | null = null;
   private volume = 0.5;
+  /** BGM 独立音量通道（FR-S3，M4） */
+  private bgmGain: GainNode | null = null;
+  private bgmVolume = 0.3;
 
   /** 首次用户交互时调用（startGame 点击），创建/恢复音频上下文 */
   ensure(): void {
@@ -23,6 +26,7 @@ class Sfx {
       this.noise = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
       const data = this.noise.getChannelData(0);
       for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+      this.startBgm();
     }
     if (this.ctx.state === 'suspended') this.ctx.resume().catch(() => {});
   }
@@ -32,8 +36,43 @@ class Sfx {
     if (this.master) this.master.gain.value = this.volume;
   }
 
-  /** 射击（按武器类音色；dist 为声源距离，>0 按距离衰减，远端开火用） */
-  shoot(weaponId: WeaponId, dist = 0): void {
+  /** BGM 独立音量（FR-S3：与音效音量分开控制）；AudioContext 未建时先存值 */
+  setBgmVolume(v: number): void {
+    this.bgmVolume = Math.max(0, Math.min(1, v));
+    if (this.bgmGain) this.bgmGain.gain.value = this.bgmVolume * 0.25;
+  }
+
+  /** 合成 BGM（FR-S3 子集，M4）：免素材环境音循环——A 小调 pad + 低通慢扫，独立音量通道 */
+  private startBgm(): void {
+    const ctx = this.ctx;
+    if (!ctx || this.bgmGain) return;
+    this.bgmGain = ctx.createGain();
+    this.bgmGain.gain.value = this.bgmVolume * 0.25;
+    this.bgmGain.connect(ctx.destination);
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 700;
+    const lfo = ctx.createOscillator();
+    lfo.frequency.value = 0.05; // 慢扫滤波（呼吸感）
+    const lfoGain = ctx.createGain();
+    lfoGain.gain.value = 250;
+    lfo.connect(lfoGain).connect(filter.frequency);
+    lfo.start();
+    filter.connect(this.bgmGain);
+    const notes = [110, 164.81, 220, 261.63]; // A2 E3 A3 C4
+    for (const [i, f] of notes.entries()) {
+      const osc = ctx.createOscillator();
+      osc.type = i % 2 === 0 ? 'sine' : 'triangle';
+      osc.frequency.value = f * (1 + (i - 1.5) * 0.0012); // 轻微失谐
+      const g = ctx.createGain();
+      g.gain.value = 0.05;
+      osc.connect(g).connect(filter);
+      osc.start();
+    }
+  }
+
+  /** 射击（按武器类音色；dist 为声源距离衰减，pan 为左右声像 -1..1——远端开火用，FR-S2） */
+  shoot(weaponId: WeaponId, dist = 0, pan = 0): void {
     const ctx = this.ctx;
     const master = this.master;
     if (!ctx || !master || !this.noise) return;
@@ -42,6 +81,14 @@ class Sfx {
     const dur = weaponId === 'sniper' ? 0.3 : weaponId === 'shotgun' ? 0.28 : 0.12;
     const gain = dist > 0 ? Math.max(0.05, 1 - dist / 30) : 1;
     const t = ctx.currentTime;
+    // 空间声像（FR-S2，M4）：按声源相对方位左右定位（不支持 StereoPanner 时静默降级）
+    const panner =
+      pan !== 0 && typeof ctx.createStereoPanner === 'function' ? ctx.createStereoPanner() : null;
+    if (panner) {
+      panner.pan.value = Math.max(-1, Math.min(1, pan));
+      panner.connect(master);
+    }
+    const out = panner ?? master;
 
     const src = ctx.createBufferSource();
     src.buffer = this.noise;
@@ -51,7 +98,7 @@ class Sfx {
     const env = ctx.createGain();
     env.gain.setValueAtTime(0.55 * gain, t);
     env.gain.exponentialRampToValueAtTime(0.001, t + dur);
-    src.connect(filter).connect(env).connect(master);
+    src.connect(filter).connect(env).connect(out);
     src.start(t);
     src.stop(t + dur);
 
@@ -63,7 +110,7 @@ class Sfx {
     const oEnv = ctx.createGain();
     oEnv.gain.setValueAtTime(0.5 * gain, t);
     oEnv.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
-    osc.connect(oEnv).connect(master);
+    osc.connect(oEnv).connect(out);
     osc.start(t);
     osc.stop(t + 0.12);
   }

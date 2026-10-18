@@ -12,7 +12,9 @@
     "build": "corepack pnpm -r build",
     "typecheck": "corepack pnpm -r typecheck",
     "smoke:server": "corepack pnpm -F @DoShoot/server smoke",
-    "smoke:net": "corepack pnpm -F @DoShoot/server exec tsx ../../scripts/net-smoke.ts"
+    "smoke:net": "corepack pnpm -F @DoShoot/server exec tsx ../../scripts/net-smoke.ts",
+    "check:i18n": "corepack pnpm -F @DoShoot/server exec tsx ../../scripts/i18n-check.ts",
+    "loadtest": "corepack pnpm -F @DoShoot/server exec tsx ../../scripts/load-test.ts"
   },
   "devDependencies": {
     "socket.io-client": "4.8.4"

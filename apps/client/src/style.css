@@ -625,3 +625,87 @@ body {
   background: #ff9800;
   color: #1a1207;
 }
+
+/* ---------- M4：小地图（FR-U2）/ 设置面板（FR-L5） ---------- */
+
+/* 小地图（左上角，FPS 下方；墙体预渲染 + 自己位置/朝向） */
+#minimap {
+  position: fixed;
+  top: 34px;
+  left: 12px;
+  border: 1px solid #2c3440;
+  border-radius: 8px;
+  pointer-events: none;
+}
+
+#settings {
+  position: fixed;
+  inset: 0;
+  z-index: 14;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 10, 13, 0.6);
+  pointer-events: auto; /* #hud 整体 pointer-events:none，面板需接收交互 */
+}
+
+#settings .panel {
+  width: 320px;
+  padding: 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background: #171c22;
+  border: 1px solid #2c3440;
+  border-radius: 14px;
+  color: #e6ecf1;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+#settings h2 {
+  text-align: center;
+  font-size: 20px;
+  letter-spacing: 2px;
+  color: #ffb74d;
+}
+
+#settings label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: #90a4ae;
+}
+
+#settings input[type='range'] {
+  width: 100%;
+  accent-color: #ff9800;
+}
+
+#settings select {
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid #2c3440;
+  border-radius: 8px;
+  background: #10151b;
+  color: #e6ecf1;
+  font-size: 14px;
+  outline: none;
+}
+
+#settings button {
+  height: 38px;
+  margin-top: 4px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  color: #e6ecf1;
+  background: #2c3440;
+  transition: filter 0.15s;
+}
+
+#settings button:hover {
+  filter: brightness(1.2);
+}

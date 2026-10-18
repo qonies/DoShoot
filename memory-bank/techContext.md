@@ -28,13 +28,16 @@
 ## 环境与命令（2026-10-18 实测可用）
 - Windows + PowerShell；Node v24.13.0；pnpm 经 corepack 调用：`corepack pnpm <cmd>`（pnpm 不在 PATH）
 - **网络协议 v2（M3）**：JoinMsg+mapId/difficulty/rejoinId/progress；EntitySnapshot+deaths；Snapshot+matchTimeLeft；WelcomeMsg+mapId/progress；事件含 unlock/matchEnd/matchReset——前后端经 PROTOCOL_VERSION 强校验，不匹配拒绝进房
-- 客户端构建 gzip ≈ 147KB（M3 含音效/计分板/结算后，M2 时 143KB）
+- **M4 延迟补偿**：ping/pong RTT 测量 + `InputMsg.pingMs`（增量可选字段，v2 前后端互相兼容）；服务端 ~1s 位置历史回溯命中（shared 常量 INTERP_DELAY/LAG_COMP_HISTORY/LAG_COMP_MAX_REWIND）
+- 客户端构建 gzip ≈ 149KB（M4 含小地图/设置/BGM；M3 147KB、M2 143KB）
 - 根目录脚本已内置 `corepack pnpm` 前缀，可直接使用：
   - `corepack pnpm dev:client` → http://localhost:5173
   - `corepack pnpm dev:server` → http://localhost:3000
   - `corepack pnpm typecheck` / `corepack pnpm build`
   - `corepack pnpm smoke:server`（服务端自检后自动退出）
   - `corepack pnpm smoke:net`（网络集成冒烟：起临时服务器 + 2 模拟客户端，全过自动退出）
+  - `corepack pnpm check:i18n`（i18n 中英键集/代码引用校对，NFR-9）
+  - `corepack pnpm loadtest`（内部压测：默认 50 客户端 × 30s 打真实服务端，NFR-3；可 `-- --clients=80 --seconds=60` 调参）
 
 ## 约束
 - 浏览器目标：Chrome/Edge/Firefox/Safari 最新两个大版本，需支持 WebGL2；最低基线 Safari ≥ 15

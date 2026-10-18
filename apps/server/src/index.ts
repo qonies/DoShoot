@@ -168,6 +168,9 @@ io.on('connection', (socket) => {
     console.log(`[server] joined: ${socket.id} as "${name}" (${room.playerCount} players)`);
   });
 
+  // 延迟测量（FR-N4，M4）：客户端定期 ping，服务端原样回 pong 供其计算 RTT（随输入上报 pingMs）
+  socket.on('ping', (t: number) => socket.emit('pong', t));
+
   socket.on('input', (msg: InputMsg) => {
     if (!joined || !msg || typeof msg !== 'object') return;
     const s = sessions.get(socket.id);
