@@ -147,7 +147,18 @@ export class GameScene {
   /** 释放 GPU 资源与窗口监听（对局销毁时调用） */
   dispose(): void {
     window.removeEventListener('resize', this.onResize);
+    // 深度释放场景内全部网格资源（含 InstancedMesh/Line：墙体、地面、实体、曳光）
+    this.scene.traverse((o) => {
+      if (o instanceof THREE.Mesh || o instanceof THREE.Line) {
+        o.geometry.dispose();
+        const m = o.material as THREE.Material | THREE.Material[];
+        if (Array.isArray(m)) m.forEach((mat) => mat.dispose());
+        else m.dispose();
+      }
+    });
     this.renderer.dispose();
+    // 释放 WebGL 上下文：下一次对局在同一 canvas 上重建 renderer，需要干净上下文
+    this.renderer.forceContextLoss();
   }
 
   render(): void {

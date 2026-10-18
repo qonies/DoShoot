@@ -1,9 +1,6 @@
 /** 网络协议消息定义（M2 落地；集中定义于 shared，见 systemPatterns「协议」与 FR-N2/N7） */
 
-import { PROTOCOL_VERSION } from './constants';
 import type { WeaponId } from './weapons';
-
-export const PROTOCOL = { version: PROTOCOL_VERSION } as const;
 
 // ---------- C2S ----------
 
@@ -51,6 +48,8 @@ export interface EntitySnapshot {
   /** 换弹进度 0..1；未在换弹为 null */
   reloadProgress: number | null;
   kills: number;
+  /** 服务端已消费的该实体最后一条输入 seq（客户端预测和解 ack，FR-N4；非本地玩家恒 0） */
+  lastSeq: number;
 }
 
 /** 对局事件（随快照捎带，替代逐事件单独推送） */

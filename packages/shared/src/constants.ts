@@ -1,7 +1,5 @@
 /** 全局数值常量（前后端同源，禁止两端各自定义） */
 
-/** 地图每格边长（世界单位） */
-export const CELL_SIZE = 1;
 /** 测试地图尺寸（格） */
 export const MAP_WIDTH = 40;
 export const MAP_HEIGHT = 40;
@@ -24,7 +22,7 @@ export const HITBOX_HALF = 0.45;
 export const PROTOCOL_VERSION = 1;
 /** 服务端固定步长模拟频率（见 FR-N2） */
 export const SIM_TICK_RATE = 30;
-/** 快照下发频率下/上限 */
+/** 快照广播频率下/上限（Hz）：广播间隔 = 1000/MAX（每次唤醒聚合多步事件），下限由冒烟断言校验 */
 export const SNAPSHOT_RATE_MIN = 20;
 export const SNAPSHOT_RATE_MAX = 30;
 /** 房间人数上限（FFA 玩家数，FR-N6） */

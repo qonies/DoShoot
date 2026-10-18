@@ -11,7 +11,7 @@
 
 ## 关键设计决策
 - **权威服务端**：所有移动校验、命中判定、伤害结算在服务端；客户端只做表现与预测。（M1 现状：单机模式权威逻辑暂在客户端 `world.ts`，M2 迁移至服务端模拟）
-- **同步策略**：服务端固定步长 30Hz 模拟、20~30Hz 下发快照；V1 广播范围为整个房间（10 人全量），**不做兴趣区域过滤**（V2 视规模再引入）；增量快照 schema 定义于 shared。客户端 60fps 渲染，其他玩家用缓冲插值（~100ms），自己用预测+服务端和解（reconciliation）。
+- **同步策略**：服务端 accumulator 固定步长 30Hz 模拟，快照按唤醒频率 20~30Hz 广播（V1 全量快照、JSON；增量编码后置至 M4，决策 #8）；V1 广播范围为整个房间（10 人全量），**不做兴趣区域过滤**（V2 视规模再引入）。客户端 60fps 渲染，其他玩家用缓冲插值（~100ms），自己用预测 + 服务端和解（seq ack + 未确认输入重放）。
 - **帧循环分离**：服务端固定步长模拟（accumulator 模式），客户端 rAF 渲染。
 - **协议**：消息类型集中定义于 shared（C2S: input/join/switch/reload；S2C: snapshot/hit/kill/spawn/event）。
 - **地图即数据**：JSON tile 地图，一处定义两端使用。
@@ -29,18 +29,18 @@ packages/shared/src/
 
 apps/server/src/
 ├─ index.ts      # HTTP 健康检查 + Socket.IO 进房（版本校验/昵称清洗/断线移除）+ smoke
-├─ room.ts       # Room：30Hz 固定步长权威模拟、输入队列限频、伤害/击杀/重生、Bot 填充
+├─ room.ts       # Room：30Hz accumulator 固定步长权威模拟、输入队列限频、伤害/击杀/重生、Bot 填充
 └─ bot.ts        # 服务端 Bot 占位 AI（合成输入，与玩家同一结算管线）
 
 apps/client/src/game/
 ├─ scene.ts      # Three.js 场景/相机/投影/镜头震动（纯表现）
 ├─ net.ts        # socket.io-client 封装（websocket-only）
 ├─ entities.ts   # RemoteEntity 快照缓冲插值(~100ms, FR-N3) + LocalPlayer 预测表现
-├─ world.ts      # NetWorld：本地移动/开火预测 + 快照和解(吸附/渐进) + 事件分发
+├─ world.ts      # NetWorld：本地移动/开火预测 + 快照和解(seq ack + 输入重放) + 事件分发
 ├─ weapons(→shared) / hud.ts / input.ts  # HUD 与输入同 M1
 scripts/net-smoke.ts  # 集成冒烟：2 模拟客户端验证进房/移动/快照/断线（corepack pnpm smoke:net）
 ```
-- **同步策略现状**：30Hz 模拟 + 30Hz 全量快照广播（JSON，规格 20~30Hz 内）；本地玩家预测+和解，远端 ~100ms 插值；延迟补偿回溯按决策 #10 后置
+- **同步策略现状**：30Hz accumulator 模拟 + 按唤醒频率 22~30Hz 全量快照广播（JSON）；本地玩家预测 + 和解（seq ack + 未确认输入重放），远端 ~100ms 插值；延迟补偿回溯按决策 #10 后置
 
 ## 目录结构（已定稿 monorepo）
 ```

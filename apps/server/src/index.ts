@@ -101,6 +101,19 @@ httpServer.listen(PORT, () => {
 
 // 冒烟自检：通过 `pnpm -F @DoShoot/server smoke` 触发，启动后自请求并退出
 if (process.env.npm_lifecycle_event === 'smoke') {
+  const shutdownAndExit = (code: number): void => {
+    room.destroy();
+    io.close();
+    httpServer.close();
+    // 关闭 keep-alive 连接（含本次自检的 fetch）。不直接 process.exit——win32 下句柄关闭
+    // 未完成时调用 exit 会触发 libuv 断言（win/async.c UV_HANDLE_CLOSING）。
+    // 设置 exitCode 让事件循环自然排空退出；unref 定时器仅在句柄悬挂时兜底强退。
+    httpServer.closeAllConnections();
+    setTimeout(() => {
+      process.exitCode = code;
+      setTimeout(() => process.exit(process.exitCode ?? code), 300).unref();
+    }, 50);
+  };
   setTimeout(async () => {
     try {
       const res = await fetch(`http://localhost:${PORT}/health`);
@@ -110,15 +123,10 @@ if (process.env.npm_lifecycle_event === 'smoke') {
       const page = await fetch(`http://localhost:${PORT}/`);
       const served = page.status === 200 && (await page.text()).includes('id="game"');
       console.log(`[smoke] GET / -> ${page.status} ${served ? '(client dist served)' : '(dist not built, skipped)'}`);
-      room.destroy();
-      io.close();
-      httpServer.close();
-      // 关闭 keep-alive 连接（含本次自检的 fetch），避免 process.exit 时触发 libuv 断言（win32）
-      httpServer.closeAllConnections();
-      setTimeout(() => process.exit(ok ? 0 : 1), 50);
+      shutdownAndExit(ok ? 0 : 1);
     } catch (err) {
       console.error('[smoke] failed:', err);
-      process.exit(1);
+      shutdownAndExit(1);
     }
   }, 600);
 }

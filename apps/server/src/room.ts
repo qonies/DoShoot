@@ -10,6 +10,7 @@ import {
   RESPAWN_DELAY,
   ROOM_CAPACITY,
   SIM_TICK_RATE,
+  SNAPSHOT_RATE_MAX,
   WEAPON_ORDER,
   WEAPONS,
   WeaponInventory,
@@ -39,6 +40,8 @@ const MAX_QUEUED_INPUTS = 8;
 const MAX_PRESS_PER_MSG = 3;
 /** 半自动/泵动累计待发射按下沿上限（防超射速积压连发，NFR-5） */
 const MAX_PENDING_PRESSES = 3;
+/** 单次 interval 唤醒最多推进的模拟步数（超过则丢弃积压，防追步风暴） */
+const MAX_STEPS_PER_FRAME = 8;
 
 /** 房间内模拟实体（玩家与 Bot 同结构，Bot 由 AI 合成输入） */
 export interface SimFighter {
@@ -51,6 +54,8 @@ export interface SimFighter {
   hp: number;
   alive: boolean;
   kills: number;
+  /** 已消费的最后一条输入 seq（客户端和解 ack，FR-N4） */
+  lastSeq: number;
   respawnAt: number | null;
   inv: WeaponInventory;
   bloom: number;
@@ -77,6 +82,9 @@ export class Room {
   private botSeq = 0;
   private time = 0;
   private tick = 0;
+  /** accumulator 固定步长（FR-N2）：模拟按累积真实时间推进，不受 setInterval 定时器粒度影响 */
+  private acc = 0;
+  private lastStepReal = 0;
   private readonly timer: ReturnType<typeof setInterval>;
 
   constructor(
@@ -86,11 +94,31 @@ export class Room {
   ) {
     this.id = roomId;
     for (let i = 0; i < BOT_FILL_MAX; i++) this.addBot();
-    this.timer = setInterval(() => this.step(), Math.round(1000 / SIM_TICK_RATE));
+    // interval 只负责按 1000/SNAPSHOT_RATE_MAX 唤醒；每次唤醒推进全部到期模拟步并聚合广播一次快照
+    this.lastStepReal = performance.now();
+    this.timer = setInterval(() => this.runFrame(), Math.round(1000 / SNAPSHOT_RATE_MAX));
   }
 
   destroy(): void {
     clearInterval(this.timer);
+  }
+
+  /** interval 唤醒：按累积真实时间推进全部到期模拟步，再聚合广播一次快照（跨步事件合并） */
+  private runFrame(): void {
+    const nowReal = performance.now();
+    let elapsedMs = nowReal - this.lastStepReal;
+    this.lastStepReal = nowReal;
+    if (elapsedMs > 250) elapsedMs = 250; // 长时间停顿（如进程挂起）后丢弃积压
+    this.acc += elapsedMs / 1000;
+    const events: GameEvent[] = [];
+    let steps = 0;
+    while (this.acc >= TICK_DT && steps < MAX_STEPS_PER_FRAME) {
+      this.acc -= TICK_DT;
+      this.step(events);
+      steps++;
+    }
+    if (this.acc > TICK_DT * MAX_STEPS_PER_FRAME) this.acc = 0; // 防御：积压异常时清零
+    if (steps > 0) this.broadcast(events);
   }
 
   get playerCount(): number {
@@ -151,6 +179,7 @@ export class Room {
         reserve: f.inv.state.reserve,
         reloadProgress: f.inv.reloadProgress(this.time),
         kills: f.kills,
+        lastSeq: f.lastSeq,
       });
     }
     return out;
@@ -158,12 +187,11 @@ export class Room {
 
   // ---------- 模拟主循环 ----------
 
-  private step(): void {
+  private step(events: GameEvent[]): void {
     const dt = TICK_DT;
     this.time += dt;
     const now = this.time;
     this.tick++;
-    const events: GameEvent[] = [];
 
     // 1. 消费玩家输入（校验 + 应用动作）
     for (const [id, q] of this.inputs) {
@@ -175,8 +203,11 @@ export class Room {
       for (const msg of q) {
         f.input.moveX = clampUnit(msg.moveX);
         f.input.moveY = clampUnit(msg.moveY);
-        f.input.aimX = Number(msg.aimX) || f.x;
-        f.input.aimY = Number(msg.aimY) || f.y;
+        // 瞄准回退仅对非有限值生效（0 是合法坐标，原 `Number()||` falsy 判断会误判）
+        const ax = Number(msg.aimX);
+        const ay = Number(msg.aimY);
+        f.input.aimX = Number.isFinite(ax) ? ax : f.x;
+        f.input.aimY = Number.isFinite(ay) ? ay : f.y;
         f.input.firing = msg.firing === true;
         f.firePresses = Math.min(
           MAX_PENDING_PRESSES,
@@ -187,6 +218,9 @@ export class Room {
         if (msg.switchTo !== null && msg.switchTo !== undefined && WEAPON_ORDER.includes(msg.switchTo)) {
           f.inv.switchTo(msg.switchTo, now);
         }
+        // 记录已消费 seq（客户端和解 ack，FR-N4）：仅接受单调递增的合法数值
+        const seq = Math.floor(Number(msg.seq));
+        if (Number.isFinite(seq) && seq > f.lastSeq) f.lastSeq = seq;
       }
       q.length = 0;
     }
@@ -232,8 +266,10 @@ export class Room {
       this.processFire(f, now, moving, events);
       f.bloom = Math.max(0, f.bloom - BLOOM_DECAY * dt);
     }
+  }
 
-    // 6. 快照广播（30Hz，规格 20~30Hz 内；全量 + 事件捎带）
+  /** 快照广播：全量快照 + 事件捎带（频率 = 唤醒频率，落在 SNAPSHOT_RATE_MIN~MAX） */
+  private broadcast(events: GameEvent[]): void {
     const snapshot: SnapshotMsg = {
       version: PROTOCOL_VERSION,
       tick: this.tick,
@@ -347,6 +383,7 @@ export class Room {
       hp: PLAYER_HP,
       alive: true,
       kills: 0,
+      lastSeq: 0,
       respawnAt: null,
       inv: new WeaponInventory(),
       bloom: 0,

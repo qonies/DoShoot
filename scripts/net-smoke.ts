@@ -4,7 +4,15 @@
 import { createServer } from 'node:http';
 import { Server } from 'socket.io';
 import { io as Client, type Socket } from 'socket.io-client';
-import { DEFAULT_MAP, PROTOCOL_VERSION, type InputMsg, type SnapshotMsg, type WelcomeMsg } from '@DoShoot/shared';
+import {
+  DEFAULT_MAP,
+  PROTOCOL_VERSION,
+  SNAPSHOT_RATE_MAX,
+  SNAPSHOT_RATE_MIN,
+  type InputMsg,
+  type SnapshotMsg,
+  type WelcomeMsg,
+} from '@DoShoot/shared';
 import { Room } from '../apps/server/src/room';
 
 const PORT = 3100;
@@ -121,10 +129,12 @@ async function run(): Promise<void> {
     if (total < 7) fail(`expected >=7 entities after both players joined, got ${total}`);
     console.log(`[smoke:net] entity count after 2 players: ${total} OK`);
 
-    // 3) 快照频率（30Hz 模拟）
+    // 3) 快照频率（广播频率 = 唤醒频率，落在 SNAPSHOT_RATE_MIN~MAX；窗口/启动误差留裕量）
     const n1 = c1.snapshots.length;
     const rate = (n1 / 2000) * 1000;
-    if (rate < 20 || rate > 35) fail(`snapshot rate ${rate.toFixed(0)}/s out of 20~30Hz range (${n1} in 2s)`);
+    const lo = SNAPSHOT_RATE_MIN - 2;
+    const hi = SNAPSHOT_RATE_MAX + 5;
+    if (rate < lo || rate > hi) fail(`snapshot rate ${rate.toFixed(0)}/s out of ${lo}~${hi} range (${n1} in window)`);
     console.log(`[smoke:net] snapshot rate OK (${rate.toFixed(0)}/s)`);
 
     // 4) Bot 活跃（快照中有实体发生位移）

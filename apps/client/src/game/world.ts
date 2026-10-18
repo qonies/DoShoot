@@ -1,4 +1,4 @@
-/** M2 联网世界：本地预测（移动/开火表现，FR-N4）+ 服务端快照和解 + 远端缓冲插值（FR-N3）
+/** M2 联网世界：本地预测（移动/开火表现，FR-N4）+ 服务端快照和解（seq ack + 未确认输入重放）+ 远端缓冲插值（FR-N3）
  *  权威边界（FR-W5/N1）：伤害/击杀/重生/弹药最终以服务端为准；客户端预测仅用于表现。 */
 
 import * as THREE from 'three';
@@ -31,13 +31,12 @@ const MAX_BLOOM = 9;
 const SHAKE_PER_RECOIL = 0.05;
 /** 预测弹药与权威差值超过该阈值时按快照校正 */
 const AMMO_RESYNC_DIFF = 2;
-/** 位置和解：误差小则渐进修正比例，误差大直接吸附 */
-const RECONCILE_LERP = 0.2;
-const RECONCILE_SNAP = 2;
 
 /** 曳光池（M1 combat.ts 的表现部分保留在客户端） */
 const TRACER_TTL = 0.1;
 const TRACER_HEIGHT = 0.78;
+/** 和解重放的未确认输入队列上限（防御性，防异常时无限增长） */
+const MAX_PENDING_INPUTS = 120;
 
 class TracerPool {
   private readonly tracers: Array<{
@@ -89,6 +88,10 @@ export class NetWorld {
   private wasDead = false;
   private seq = 0;
   private firePressesPending = 0;
+  /** 已发送但未被服务端确认的输入（快照和解时重放，FR-N4） */
+  private pendingInputs: Array<{ seq: number; moveX: number; moveY: number; dt: number }> = [];
+  /** 距上次发送输入累计的真实 dt */
+  private inputDtAcc = 0;
   /** 权威 weaponId 与本地预测 current 不一致的起始时刻（去抖：短暂不一致是切枪快照滞后的正常表现） */
   private weaponMismatchSince: number | null = null;
 
@@ -137,6 +140,7 @@ export class NetWorld {
   /** 每帧：本地预测 + 远端插值渲染 */
   update(dt: number, cmd: InputCommand, aimX: number, aimY: number): void {
     this.localTime += dt;
+    this.inputDtAcc += dt;
     this.inv.update(this.localTime);
     this.recoilBloom = Math.max(0, this.recoilBloom - BLOOM_DECAY * dt);
 
@@ -145,8 +149,8 @@ export class NetWorld {
       this.predictAim(aimX, aimY);
       this.predictFire(cmd);
       this.handleSwitchAndReload(cmd);
+      if (cmd.firePressed) this.firePressesPending++;
     }
-    if (cmd.firePressed) this.firePressesPending++;
 
     this.local.sync();
     const renderTime = this.serverTime - INTERP_DELAY;
@@ -169,6 +173,12 @@ export class NetWorld {
       switchTo: alive ? cmd.switchTo : null,
     };
     this.firePressesPending = 0;
+    if (alive) {
+      // 记录该条输入及其覆盖的 dt，供快照和解重放（FR-N4）
+      if (this.pendingInputs.length >= MAX_PENDING_INPUTS) this.pendingInputs.shift();
+      this.pendingInputs.push({ seq: msg.seq, moveX: msg.moveX, moveY: msg.moveY, dt: this.inputDtAcc });
+    }
+    this.inputDtAcc = 0;
     return msg;
   }
 
@@ -198,18 +208,17 @@ export class NetWorld {
         this.inv.resetAll();
         this.weaponMismatchSince = null;
         this.recoilBloom = 0;
+        this.pendingInputs = [];
         return;
       }
-      // 位置和解（FR-N4）：误差大吸附，小则渐进修正
-      const dx = e.x - this.local.x;
-      const dy = e.y - this.local.y;
-      if (Math.hypot(dx, dy) > RECONCILE_SNAP) {
-        this.local.x = e.x;
-        this.local.y = e.y;
-      } else {
-        this.local.x += dx * RECONCILE_LERP;
-        this.local.y += dy * RECONCILE_LERP;
+      // 位置和解（FR-N4）：对齐权威位置，再重放服务端尚未消费的输入
+      //（替代朴素 lerp/吸附——消除快照滞后于本地预测造成的稳态拖影/橡皮筋）
+      while (this.pendingInputs.length > 0 && this.pendingInputs[0]!.seq <= e.lastSeq) {
+        this.pendingInputs.shift();
       }
+      this.local.x = e.x;
+      this.local.y = e.y;
+      for (const p of this.pendingInputs) this.moveBy(p.moveX, p.moveY, p.dt);
       this.local.hp = e.hp;
       this.local.kills = e.kills;
       // 权威武器校正：切换输入丢失/被限频丢弃时防两端 current 分叉；
@@ -238,6 +247,9 @@ export class NetWorld {
       this.local.alive = false;
       this.local.deathAt = this.localTime;
       this.recoilBloom = 0;
+      // 死亡期间输入不被消费（服务端清队列、不 ack）；丢弃待重放输入，防止复活时位置漂移
+      this.pendingInputs = [];
+      this.firePressesPending = 0;
     }
   }
 
@@ -260,10 +272,15 @@ export class NetWorld {
   }
 
   private predictMovement(cmd: InputCommand, dt: number): void {
-    const len = Math.hypot(cmd.moveX, cmd.moveY);
+    this.moveBy(cmd.moveX, cmd.moveY, dt);
+  }
+
+  /** 带碰撞移动（预测与和解重放共用同一实现） */
+  private moveBy(moveX: number, moveY: number, dt: number): void {
+    const len = Math.hypot(moveX, moveY);
     if (len <= 0) return;
-    const nx = this.local.x + (cmd.moveX / len) * PLAYER_SPEED * dt;
-    const ny = this.local.y + (cmd.moveY / len) * PLAYER_SPEED * dt;
+    const nx = this.local.x + (moveX / len) * PLAYER_SPEED * dt;
+    const ny = this.local.y + (moveY / len) * PLAYER_SPEED * dt;
     const r = resolveCircleWalls(this.map, nx, ny, PLAYER_RADIUS);
     this.local.x = r.x;
     this.local.y = r.y;

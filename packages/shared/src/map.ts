@@ -1,5 +1,7 @@
 /** 地图数据类型与默认测试地图（见 FR-MP1/MP2/MP4：地图即数据，两端同源） */
 
+import { MAP_HEIGHT, MAP_WIDTH } from './constants';
+
 export interface Vec2 {
   x: number;
   y: number;
@@ -21,8 +23,8 @@ export interface GameMap {
 
 /** M0 测试地图「靶场」：40×40，边框墙 + 四象限 L 形掩体 + 中央高台 + 散点单箱 */
 function createTestMap(): GameMap {
-  const W = 40;
-  const H = 40;
+  const W = MAP_WIDTH;
+  const H = MAP_HEIGHT;
   const grid: number[][] = [];
   for (let y = 0; y < H; y++) {
     const row: number[] = [];
