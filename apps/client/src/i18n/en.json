@@ -5,10 +5,20 @@
   "map": "Map",
   "quickJoin": "Quick Join",
   "start": "Start Game",
-  "lang": "中文 / English",
-  "hint": "WASD to move · Mouse to aim · LMB to shoot",
+  "hint": "WASD move · Mouse aim · LMB fire · R reload · 1~6 / wheel switch weapon",
   "randomName": "Player",
   "modeTdm": "TDM (V2)",
   "modeHardpoint": "Hardpoint (V2)",
-  "map.range": "Range"
+  "map.range": "Range",
+  "weapon.pistol": "Pistol",
+  "weapon.smg": "SMG",
+  "weapon.ar": "Assault Rifle",
+  "weapon.shotgun": "Shotgun",
+  "weapon.sniper": "Sniper Rifle",
+  "weapon.lmg": "LMG",
+  "hud.kills": "Kills",
+  "hud.reloading": "Reloading…",
+  "hud.eliminated": "ELIMINATED",
+  "hud.killedBy": "Killed by {name}",
+  "hud.respawnIn": "Respawn in {s}s"
 }

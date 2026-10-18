@@ -5,10 +5,20 @@
   "map": "地图",
   "quickJoin": "快速加入",
   "start": "开始游戏",
-  "lang": "中文 / English",
-  "hint": "WASD 移动 · 鼠标瞄准 · 左键射击",
+  "hint": "WASD 移动 · 鼠标瞄准 · 左键射击 · R 换弹 · 1~6/滚轮切枪",
   "randomName": "玩家",
   "modeTdm": "TDM (V2)",
   "modeHardpoint": "Hardpoint (V2)",
-  "map.range": "靶场"
+  "map.range": "靶场",
+  "weapon.pistol": "手枪",
+  "weapon.smg": "冲锋枪",
+  "weapon.ar": "突击步枪",
+  "weapon.shotgun": "霰弹枪",
+  "weapon.sniper": "狙击枪",
+  "weapon.lmg": "轻机枪",
+  "hud.kills": "击杀",
+  "hud.reloading": "换弹中…",
+  "hud.eliminated": "击杀！",
+  "hud.killedBy": "被 {name} 击杀",
+  "hud.respawnIn": "{s} 秒后重生"
 }

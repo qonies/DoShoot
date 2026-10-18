@@ -1,13 +1,13 @@
-/** M0 入口：i18n 初始化 + 大厅交互 + 游戏主循环（rAF 渲染，见 systemPatterns「帧循环分离」） */
+/** M1 入口：i18n 初始化 + 大厅交互 + 单机对局主循环（rAF 渲染；战斗权威逻辑见 game/world.ts，M2 联机时迁移至服务端） */
 
 import './style.css';
 import * as THREE from 'three';
-import { DEFAULT_MAP, PLAYER_SPEED, resolveCircleWalls } from '@deadshot/shared';
+import { DEFAULT_MAP } from '@deadshot/shared';
 import { applyDom, getLang, t, toggleLang } from './i18n';
 import { GameScene } from './game/scene';
-import { Player } from './game/player';
+import { World } from './game/world';
 import { Input } from './game/input';
-import { Shooting } from './game/shooting';
+import { Hud } from './game/hud';
 
 const NICKNAME_KEY = 'deadshot.nickname';
 
@@ -37,7 +37,7 @@ function startGame(): void {
   localStorage.setItem(NICKNAME_KEY, nickname);
   document.querySelector('#lobby')!.classList.add('hidden');
   document.querySelector('#hud')!.classList.remove('hidden');
-  runGameLoop();
+  runGameLoop(nickname);
 }
 document.querySelector('#start')!.addEventListener('click', startGame);
 document.querySelector('#quickJoin')!.addEventListener('click', startGame);
@@ -45,21 +45,29 @@ nicknameInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') startGame();
 });
 
-// ---------- 游戏主循环 ----------
-function runGameLoop(): void {
+// ---------- 单机对局主循环 ----------
+function runGameLoop(nickname: string): void {
   const canvas = document.querySelector<HTMLCanvasElement>('#game')!;
   const map = DEFAULT_MAP;
   const gameScene = new GameScene(canvas, map);
-  const spawn = map.spawns[0]!;
-  const player = new Player(gameScene.scene, spawn.x, spawn.y);
+  const hud = new Hud();
+  const world = new World(gameScene, map, nickname, {
+    onKill: (killer, victim, weaponId) => hud.addKillFeed(killer, victim, weaponId),
+    onPlayerDamaged: (dmg) => hud.addVignette((dmg / 100) * 1.4),
+    onPlayerDeath: () => undefined, // 重生界面按帧刷新（setRespawn）
+    onPlayerRespawn: () => undefined,
+    onPlayerHitEnemy: (dmg, killed, wx, wy) => {
+      hud.hitMarker(killed);
+      hud.addFloater(killed ? t('hud.eliminated') : `-${Math.round(dmg)}`, wx, wy, killed ? 'kill' : 'dmg', gameScene);
+    },
+  });
   const input = new Input(canvas);
-  const shooting = new Shooting(gameScene.scene, map, gameScene.dummyTargets);
+  const aim = new THREE.Vector2();
 
   const hintEl = document.querySelector<HTMLElement>('#hint')!;
   hintEl.textContent = t('hint');
   const fpsEl = document.querySelector<HTMLElement>('#fps')!;
 
-  const aim = new THREE.Vector2();
   let last = performance.now();
   let fpsFrames = 0;
   let fpsTime = 0;
@@ -68,34 +76,37 @@ function runGameLoop(): void {
     const dt = Math.min((now - last) / 1000, 0.05);
     last = now;
 
-    // 移动（WASD 八方向 + 圆形碰撞解算，FR-C1）
-    const mv = input.getMoveVector();
-    if (mv.x !== 0 || mv.y !== 0) {
-      const nx = player.x + mv.x * PLAYER_SPEED * dt;
-      const ny = player.y + mv.y * PLAYER_SPEED * dt;
-      const resolved = resolveCircleWalls(map, nx, ny, player.radius);
-      player.x = resolved.x;
-      player.y = resolved.y;
-    }
+    const cmd = input.consumeCommands();
+    gameScene.screenToGround(input.mouseNdcX, input.mouseNdcY, aim);
+    world.update(dt, cmd, aim.x, aim.y);
 
-    // 瞄准（鼠标 → 地面世界坐标 → 朝向角）
-    shooting.getAimPoint(gameScene.camera, input.mouseNdcX, input.mouseNdcY, aim);
-    const aimDx = aim.x - player.x;
-    const aimDy = aim.y - player.y;
-    if (Math.hypot(aimDx, aimDy) > 0.1) {
-      player.aimAngle = Math.atan2(aimDx, aimDy);
-    }
+    // HUD 刷新（FR-U1/C3/C4）
+    hud.setHealth(world.player.hp);
+    const spec = world.inv.spec;
+    const st = world.inv.state;
+    const reloadProgress =
+      st.reloadEnd !== null ? 1 - (st.reloadEnd - world.time) / spec.reloadTime : null;
+    hud.setWeapon(t(spec.nameKey), st.ammo, st.reserve, reloadProgress);
+    hud.setKills(world.playerKills);
+    const moving = cmd.moveX !== 0 || cmd.moveY !== 0;
+    hud.setCrosshair(
+      input.mouseClientX,
+      input.mouseClientY,
+      5 + world.recoilBloom * 1.8 + (moving ? spec.moveSpreadDeg * 1.2 : 0),
+      world.player.alive,
+    );
+    hud.setRespawn(
+      world.player.alive
+        ? null
+        : { killer: world.playerKillerName ?? '', seconds: world.playerRespawnIn },
+    );
+    hud.update(dt);
 
-    // 射击（按住左键连发，FR-C2）
-    shooting.tryFire(dt, player.x, player.y, aim.x, aim.y, input.firing);
-    shooting.update(dt);
-
-    player.sync();
-    gameScene.updateDummies(now);
-    gameScene.follow(player.x, player.y);
+    gameScene.update(dt);
+    gameScene.follow(world.player.x, world.player.y);
     gameScene.render();
 
-    // FPS 计数（M0 验收：≥ 60 FPS）
+    // FPS 计数（NFR-1：≥ 60 FPS）
     fpsFrames++;
     fpsTime += dt;
     if (fpsTime >= 0.5) {

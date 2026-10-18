@@ -8,10 +8,35 @@
   <body>
     <canvas id="game"></canvas>
 
-    <!-- HUD（FR-U1/U4：DOM 分层，游戏世界用 Three.js） -->
+    <!-- HUD（FR-U1/U4：DOM 分层；M1 新增血条/弹药/换弹/击杀流/准星/重生界面） -->
     <div id="hud" class="hidden">
       <div id="fps">-- FPS</div>
       <div id="hint"></div>
+      <div id="topbar">
+        <span data-i18n="hud.kills"></span>
+        <b id="killCount">0</b>
+      </div>
+      <div id="killfeed"></div>
+      <div id="crosshair">
+        <span class="l"></span><span class="r"></span><span class="u"></span><span class="d"></span><span class="dot"></span>
+        <div id="hitmarker"><span></span><span></span></div>
+      </div>
+      <div id="floaters"></div>
+      <div id="healthwrap">
+        <div id="healthbar"><div id="healthfill"></div></div>
+        <span id="hptext">100</span>
+      </div>
+      <div id="weaponwrap">
+        <div id="weaponname"></div>
+        <div id="ammo"><b id="ammoMag">--</b><span id="ammoReserve"> / --</span></div>
+        <div id="reloadbar" class="hidden"><div id="reloadfill"></div></div>
+        <div id="reloadtext" class="hidden" data-i18n="hud.reloading"></div>
+      </div>
+      <div id="respawn" class="hidden">
+        <div id="respawnKiller"></div>
+        <div id="respawnTimer"></div>
+      </div>
+      <div id="vignette"></div>
     </div>
 
     <!-- 大厅（FR-L1/L2/L3/L5/L6） -->

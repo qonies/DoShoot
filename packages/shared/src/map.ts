@@ -77,3 +77,27 @@ export function isWall(map: GameMap, cx: number, cy: number): boolean {
   if (cx < 0 || cy < 0 || cx >= map.width || cy >= map.height) return true;
   return map.grid[cy][cx] === 1;
 }
+
+/**
+ * 出生点选择（FR-MP3）：返回距所有敌人最远的出生点；无敌人时随机。
+ */
+export function pickSpawnFarthest(map: GameMap, enemies: readonly Vec2[]): Vec2 {
+  if (map.spawns.length === 0) return { x: map.width / 2, y: map.height / 2 };
+  if (enemies.length === 0) {
+    return map.spawns[Math.floor(Math.random() * map.spawns.length)]!;
+  }
+  let best = map.spawns[0]!;
+  let bestScore = -1;
+  for (const s of map.spawns) {
+    let minD = Infinity;
+    for (const e of enemies) {
+      const d = Math.hypot(s.x - e.x, s.y - e.y);
+      if (d < minD) minD = d;
+    }
+    if (minD > bestScore) {
+      bestScore = minD;
+      best = s;
+    }
+  }
+  return best;
+}

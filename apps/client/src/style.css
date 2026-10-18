@@ -17,7 +17,7 @@ body {
   display: block;
   width: 100vw;
   height: 100vh;
-  cursor: crosshair;
+  cursor: none; /* 自绘动态准星（FR-U1） */
 }
 
 .hidden {
@@ -138,4 +138,310 @@ body {
   background: transparent;
   border: 1px solid #2c3440;
   color: #90a4ae;
+}
+
+/* ---------- HUD（M1：血条/弹药/击杀流/准星/重生界面） ---------- */
+#hud {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  color: #cfd8dc;
+  font-size: 13px;
+  pointer-events: none;
+  user-select: none;
+}
+
+#fps {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  font-weight: 600;
+  font-size: 12px;
+  color: #9fe8a9;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+#hint {
+  position: fixed;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #78909c;
+  font-size: 12px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+#topbar {
+  position: fixed;
+  top: 12px;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  align-items: baseline;
+  gap: 10px;
+  color: #90a4ae;
+  font-size: 14px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+#topbar b {
+  color: #ffb74d;
+  font-size: 20px;
+}
+
+#killfeed {
+  position: fixed;
+  top: 14px;
+  right: 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+#killfeed .kf {
+  background: rgba(13, 17, 22, 0.72);
+  border: 1px solid #2c3440;
+  border-radius: 6px;
+  padding: 3px 10px;
+  font-size: 12px;
+  animation: kfin 0.18s ease-out;
+}
+
+#killfeed .kf b {
+  color: #ffb74d;
+  font-weight: 600;
+}
+
+#killfeed .kf i {
+  color: #90a4ae;
+  font-style: normal;
+  font-size: 11px;
+  margin: 0 6px;
+}
+
+#killfeed .kf span {
+  color: #e57373;
+}
+
+@keyframes kfin {
+  from {
+    transform: translateX(14px);
+    opacity: 0;
+  }
+}
+
+/* 动态准星（--gap 由 JS 按散布/后坐力设置） */
+#crosshair {
+  --gap: 6px;
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  z-index: 6;
+}
+
+#crosshair > span {
+  position: absolute;
+  background: #eaf6ff;
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.9);
+}
+
+#crosshair .l { width: 8px; height: 2px; right: var(--gap); top: -1px; }
+#crosshair .r { width: 8px; height: 2px; left: var(--gap); top: -1px; }
+#crosshair .u { height: 8px; width: 2px; bottom: var(--gap); left: -1px; }
+#crosshair .d { height: 8px; width: 2px; top: var(--gap); left: -1px; }
+#crosshair .dot { width: 2px; height: 2px; left: -1px; top: -1px; }
+
+#hitmarker {
+  position: absolute;
+  left: -11px;
+  top: -11px;
+  width: 22px;
+  height: 22px;
+  opacity: 0;
+}
+
+#hitmarker span {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 14px;
+  height: 2px;
+  background: #fff;
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.9);
+}
+
+#hitmarker span:first-child { transform: translate(-50%, -50%) rotate(45deg); }
+#hitmarker span:last-child { transform: translate(-50%, -50%) rotate(-45deg); }
+
+#hitmarker.kill span {
+  background: #ff5252;
+  height: 3px;
+}
+
+#hitmarker.show {
+  animation: hitpop 0.2s ease-out;
+}
+
+@keyframes hitpop {
+  0% { opacity: 1; transform: scale(1.5); }
+  100% { opacity: 0; transform: scale(1); }
+}
+
+/* 血条（FR-U1） */
+#healthwrap {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+#healthbar {
+  width: 220px;
+  height: 14px;
+  background: rgba(13, 17, 22, 0.75);
+  border: 1px solid #2c3440;
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+#healthfill {
+  height: 100%;
+  width: 100%;
+  background: linear-gradient(90deg, #66bb6a, #9fe8a9);
+  transition: width 0.12s ease-out;
+}
+
+#healthfill.low {
+  background: linear-gradient(90deg, #e53935, #ff7043);
+}
+
+#hptext {
+  color: #e6ecf1;
+  font-weight: 700;
+  font-size: 16px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+  min-width: 34px;
+}
+
+/* 弹药/换弹（FR-U1/FR-W3） */
+#weaponwrap {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+#weaponname {
+  color: #90a4ae;
+  font-size: 13px;
+  letter-spacing: 1px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+#ammo {
+  color: #e6ecf1;
+  font-size: 26px;
+  font-weight: 700;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+}
+
+#ammoReserve {
+  color: #78909c;
+  font-size: 16px;
+  font-weight: 500;
+}
+
+#ammoMag.empty {
+  color: #e57373;
+}
+
+#reloadbar {
+  width: 160px;
+  height: 6px;
+  background: rgba(13, 17, 22, 0.75);
+  border: 1px solid #2c3440;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+#reloadfill {
+  height: 100%;
+  width: 0%;
+  background: #ffb74d;
+}
+
+#reloadtext {
+  color: #ffb74d;
+  font-size: 11px;
+}
+
+/* 伤害飘字（FR-C3） */
+#floaters {
+  position: fixed;
+  inset: 0;
+  z-index: 6;
+}
+
+.floater {
+  position: fixed;
+  transform: translate(-50%, -50%);
+  font-weight: 700;
+  font-size: 14px;
+  color: #ffd54f;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+  animation: floatUp 0.85s ease-out forwards;
+}
+
+.floater.kill {
+  color: #ff7043;
+  font-size: 17px;
+  letter-spacing: 1px;
+}
+
+@keyframes floatUp {
+  from { opacity: 1; margin-top: 0; }
+  to { opacity: 0; margin-top: -36px; }
+}
+
+/* 受击泛红（FR-C3） */
+#vignette {
+  position: fixed;
+  inset: 0;
+  z-index: 4;
+  opacity: 0;
+  background: radial-gradient(ellipse at center, rgba(255, 0, 0, 0) 42%, rgba(190, 20, 20, 0.6) 100%);
+}
+
+/* 重生界面（FR-C4） */
+#respawn {
+  position: fixed;
+  inset: 0;
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(8, 10, 13, 0.55);
+}
+
+#respawnKiller {
+  color: #e57373;
+  font-size: 22px;
+  font-weight: 700;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.8);
+}
+
+#respawnTimer {
+  color: #cfd8dc;
+  font-size: 15px;
 }

@@ -1,4 +1,4 @@
-/** Three.js 场景：正交俯视角相机、地面/墙体渲染、灯光阴影、射击盒子（M0 验收项） */
+/** Three.js 场景：正交俯视角相机、地面/墙体渲染、灯光阴影、坐标投影与镜头震动（FR-U1/C2） */
 
 import * as THREE from 'three';
 import {
@@ -7,57 +7,26 @@ import {
   MAP_HEIGHT,
   WALL_HEIGHT,
   isWall,
-  type AABB,
   type GameMap,
 } from '@deadshot/shared';
-
-/** 射击盒子（FR-C2：M0 用作射线命中目标） */
-export class DummyTarget {
-  readonly aabb: AABB;
-  private readonly mat: THREE.MeshStandardMaterial;
-  private flashUntil = 0;
-
-  constructor(public readonly mesh: THREE.Mesh) {
-    this.mat = mesh.material as THREE.MeshStandardMaterial;
-    this.mat.emissive.setHex(0xff3333);
-    this.mat.emissiveIntensity = 0;
-    mesh.updateMatrixWorld();
-    const p = mesh.position;
-    const s = 0.45;
-    this.aabb = { minX: p.x - s, minY: p.z - s, maxX: p.x + s, maxY: p.z + s };
-  }
-
-  flash(nowMs: number): void {
-    this.flashUntil = nowMs + 150;
-    this.mat.emissiveIntensity = 1.4;
-  }
-
-  update(nowMs: number): void {
-    if (this.flashUntil !== 0 && nowMs >= this.flashUntil) {
-      this.mat.emissiveIntensity = 0;
-      this.flashUntil = 0;
-    }
-  }
-}
-
-const DUMMY_POSITIONS: Array<[number, number]> = [
-  [10, 20],
-  [20, 10],
-  [30, 20],
-  [20, 30],
-];
 
 export class GameScene {
   readonly scene = new THREE.Scene();
   readonly camera: THREE.OrthographicCamera;
   readonly renderer: THREE.WebGLRenderer;
-  readonly dummyTargets: DummyTarget[] = [];
 
   private readonly viewSize = 20;
   private readonly dirLight: THREE.DirectionalLight;
   private readonly canvas: HTMLCanvasElement;
+  /** 镜头震动幅度（由开火后坐力触发，随时间衰减） */
+  private shake = 0;
+  private readonly raycaster = new THREE.Raycaster();
+  private readonly groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  private readonly ndc = new THREE.Vector2();
+  private readonly hitPoint = new THREE.Vector3();
+  private readonly proj = new THREE.Vector3();
 
-  constructor(canvas: HTMLCanvasElement, map = DEFAULT_MAP) {
+  constructor(canvas: HTMLCanvasElement, map: GameMap = DEFAULT_MAP) {
     this.canvas = canvas;
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.shadowMap.enabled = true;
@@ -86,7 +55,6 @@ export class GameScene {
 
     this.buildGround(map);
     this.buildWalls(map);
-    this.buildDummies();
 
     this.handleResize();
     window.addEventListener('resize', () => this.handleResize());
@@ -124,28 +92,45 @@ export class GameScene {
     this.scene.add(walls);
   }
 
-  private buildDummies(): void {
-    const geo = new THREE.BoxGeometry(0.9, 0.9, 0.9);
-    for (const [x, y] of DUMMY_POSITIONS) {
-      const mat = new THREE.MeshStandardMaterial({ color: 0xc2703e, roughness: 0.6 });
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.position.set(x, 0.45, y);
-      mesh.castShadow = true;
-      this.scene.add(mesh);
-      this.dummyTargets.push(new DummyTarget(mesh));
+  /** 鼠标 NDC → 地面 y=0 平面世界坐标（FR-C2 瞄准） */
+  screenToGround(ndcX: number, ndcY: number, out: THREE.Vector2): void {
+    this.ndc.set(ndcX, ndcY);
+    this.raycaster.setFromCamera(this.ndc, this.camera);
+    if (this.raycaster.ray.intersectPlane(this.groundPlane, this.hitPoint)) {
+      out.set(this.hitPoint.x, this.hitPoint.z);
     }
   }
 
-  /** 相机跟随玩家（正交框随窗口比例更新） */
+  /** 世界坐标 → 屏幕像素坐标（伤害飘字定位用） */
+  worldToScreen(x: number, y: number): { x: number; y: number } {
+    this.proj.set(x, 0, y).project(this.camera);
+    return {
+      x: (this.proj.x * 0.5 + 0.5) * window.innerWidth,
+      y: (-this.proj.y * 0.5 + 0.5) * window.innerHeight,
+    };
+  }
+
+  /** 开火后坐力镜头震动（FR-W2 表现） */
+  addShake(amount: number): void {
+    this.shake = Math.min(0.6, this.shake + amount);
+  }
+
+  /** 每帧推进震动衰减 */
+  update(dt: number): void {
+    this.shake = Math.max(0, this.shake - dt * 2.2);
+  }
+
+  /** 相机跟随玩家（正交框随窗口比例更新；叠加震动抖动） */
   follow(x: number, y: number): void {
-    this.camera.position.set(x, 22, y + 12);
+    const j = this.shake;
+    this.camera.position.set(
+      x + (Math.random() - 0.5) * j,
+      22,
+      y + 12 + (Math.random() - 0.5) * j,
+    );
     this.camera.lookAt(x, 0, y);
     this.dirLight.position.set(x + 8, 30, y + 6);
     this.dirLight.target.position.set(x, 0, y);
-  }
-
-  updateDummies(nowMs: number): void {
-    for (const d of this.dummyTargets) d.update(nowMs);
   }
 
   handleResize(): void {

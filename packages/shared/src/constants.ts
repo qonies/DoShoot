@@ -13,10 +13,12 @@ export const PLAYER_SPEED = 6;
 /** 玩家碰撞半径 */
 export const PLAYER_RADIUS = 0.4;
 
-/** M0 射击盒子用：开火间隔（秒） */
-export const FIRE_INTERVAL = 0.15;
-/** 射线最大射程 */
-export const MAX_RAY_DIST = 60;
+/** 玩家生命上限（FR-C3：HP 100，V1 不做护甲） */
+export const PLAYER_HP = 100;
+/** 死亡后重生延迟（秒，FR-C4：2~3s） */
+export const RESPAWN_DELAY = 2.5;
+/** 命中判定盒半边长（略大于碰撞半径，命中手感从宽） */
+export const HITBOX_HALF = 0.45;
 
 /** 网络协议版本（见 FR-N7） */
 export const PROTOCOL_VERSION = 1;
