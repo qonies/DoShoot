@@ -20,5 +20,9 @@
   "hud.reloading": "换弹中…",
   "hud.eliminated": "击杀！",
   "hud.killedBy": "被 {name} 击杀",
-  "hud.respawnIn": "{s} 秒后重生"
+  "hud.respawnIn": "{s} 秒后重生",
+  "net.connecting": "正在连接服务器…",
+  "net.versionMismatch": "客户端版本不一致，请刷新页面",
+  "net.roomFull": "房间已满，请稍后再试",
+  "net.disconnected": "与服务器的连接已断开"
 }

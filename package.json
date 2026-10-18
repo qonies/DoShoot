@@ -11,6 +11,10 @@
     "dev:server": "corepack pnpm -F @deadshot/server dev",
     "build": "corepack pnpm -r build",
     "typecheck": "corepack pnpm -r typecheck",
-    "smoke:server": "corepack pnpm -F @deadshot/server smoke"
+    "smoke:server": "corepack pnpm -F @deadshot/server smoke",
+    "smoke:net": "corepack pnpm -F @deadshot/server exec tsx ../../scripts/net-smoke.ts"
+  },
+  "devDependencies": {
+    "socket.io-client": "4.8.4"
   }
 }

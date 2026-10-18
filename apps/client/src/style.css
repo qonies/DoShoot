@@ -445,3 +445,19 @@ body {
   color: #cfd8dc;
   font-size: 15px;
 }
+
+/* 连接状态提示（M2） */
+#netmsg {
+  position: fixed;
+  top: 45%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 20;
+  padding: 14px 28px;
+  background: rgba(13, 17, 22, 0.9);
+  border: 1px solid #2c3440;
+  border-radius: 10px;
+  color: #e6ecf1;
+  font-size: 15px;
+  text-align: center;
+}

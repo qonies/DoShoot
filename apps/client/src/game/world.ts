@@ -1,196 +1,303 @@
-/** 对局世界（M1 单机权威）：实体管理、玩家武器流程、Bot、伤害/击杀/重生（FR-C3/C4；M2 联机时此层迁移至服务端） */
+/** M2 联网世界：本地预测（移动/开火表现，FR-N4）+ 服务端快照和解 + 远端缓冲插值（FR-N3）
+ *  权威边界（FR-W5/N1）：伤害/击杀/重生/弹药最终以服务端为准；客户端预测仅用于表现。 */
 
+import * as THREE from 'three';
 import {
   PLAYER_RADIUS,
   PLAYER_SPEED,
   RESPAWN_DELAY,
-  pickSpawnFarthest,
+  WeaponInventory,
   resolveCircleWalls,
+  resolveShot,
   type GameMap,
+  type InputMsg,
+  type SnapshotMsg,
   type WeaponId,
+  type WelcomeMsg,
 } from '@deadshot/shared';
-import { Fighter } from './fighter';
-import { Bot, type BotHandlers } from './bot';
-import { WeaponInventory } from './weapons';
-import { TracerPool, fireWeapon } from './combat';
-import type { GameScene } from './scene';
+import { GameScene } from './scene';
+import { INTERP_DELAY, LocalPlayer, RemoteEntity } from './entities';
 import type { InputCommand } from './input';
 
 export interface WorldCallbacks {
   onKill(killerName: string, victimName: string, weaponId: WeaponId): void;
   onPlayerDamaged(dmg: number): void;
-  onPlayerDeath(): void;
-  onPlayerRespawn(): void;
   onPlayerHitEnemy(dmg: number, killed: boolean, wx: number, wy: number): void;
 }
 
-/** 每点后坐力系数带来的准星扩散（度） */
 const BLOOM_PER_RECOIL = 0.6;
-/** 扩散每秒回落（度/秒） */
 const BLOOM_DECAY = 14;
 const MAX_BLOOM = 9;
-/** 每点后坐力系数带来的镜头震动 */
 const SHAKE_PER_RECOIL = 0.05;
-const BOT_COUNT = 5;
-const BOT_COLORS = [0xe57373, 0xffb74d, 0xba68c8, 0x4db6ac, 0xaed581];
+/** 预测弹药与权威差值超过该阈值时按快照校正 */
+const AMMO_RESYNC_DIFF = 2;
+/** 位置和解：误差小则渐进修正比例，误差大直接吸附 */
+const RECONCILE_LERP = 0.2;
+const RECONCILE_SNAP = 2;
 
-export class World {
-  /** 对局累计时间（秒），作为全实体统一时钟 */
-  time = 0;
-  readonly player: Fighter;
-  readonly bots: Bot[] = [];
-  readonly fighters: Fighter[] = [];
+/** 曳光池（M1 combat.ts 的表现部分保留在客户端） */
+const TRACER_TTL = 0.1;
+const TRACER_HEIGHT = 0.78;
+
+class TracerPool {
+  private readonly tracers: Array<{
+    line: THREE.Line;
+    material: THREE.LineBasicMaterial;
+    ttl: number;
+  }> = [];
+
+  constructor(private readonly scene: THREE.Scene) {}
+
+  spawn(ox: number, oy: number, ex: number, ey: number): void {
+    const geo = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(ox, TRACER_HEIGHT, oy),
+      new THREE.Vector3(ex, TRACER_HEIGHT, ey),
+    ]);
+    const material = new THREE.LineBasicMaterial({ color: 0xffe08a, transparent: true, opacity: 0.95 });
+    const line = new THREE.Line(geo, material);
+    this.scene.add(line);
+    this.tracers.push({ line, material, ttl: TRACER_TTL });
+  }
+
+  update(dt: number): void {
+    for (let i = this.tracers.length - 1; i >= 0; i--) {
+      const tr = this.tracers[i]!;
+      tr.ttl -= dt;
+      if (tr.ttl <= 0) {
+        this.scene.remove(tr.line);
+        tr.line.geometry.dispose();
+        tr.material.dispose();
+        this.tracers.splice(i, 1);
+      } else {
+        tr.material.opacity = Math.max(0, (tr.ttl / TRACER_TTL) * 0.95);
+      }
+    }
+  }
+}
+
+export class NetWorld {
+  readonly local: LocalPlayer;
   readonly inv = new WeaponInventory();
-  playerKills = 0;
-  /** 玩家连续开火累积的准星扩散（度） */
   recoilBloom = 0;
-  /** 玩家最近一次被谁击杀（重生界面显示用） */
   playerKillerName: string | null = null;
 
-  private readonly map: GameMap;
-  private readonly scene: GameScene;
-  private readonly cb: WorldCallbacks;
+  private readonly entities = new Map<string, RemoteEntity>();
   private readonly tracers: TracerPool;
+  private readonly localId: string;
+  private localTime = 0;
+  private serverTime = 0;
+  private wasDead = false;
+  private seq = 0;
+  private firePressesPending = 0;
 
-  constructor(scene: GameScene, map: GameMap, playerName: string, cb: WorldCallbacks) {
-    this.scene = scene;
-    this.map = map;
-    this.cb = cb;
+  constructor(
+    private readonly scene: GameScene,
+    private readonly map: GameMap,
+    private readonly cb: WorldCallbacks,
+    welcome: WelcomeMsg,
+  ) {
     this.tracers = new TracerPool(scene.scene);
-
-    const spawn = map.spawns[0]!;
-    this.player = new Fighter('player', playerName, true, scene.scene, spawn.x, spawn.y, 0x4fc3f7);
-    this.fighters.push(this.player);
-
-    for (let i = 0; i < BOT_COUNT; i++) {
-      const s = map.spawns[(i + 1) % map.spawns.length]!;
-      const color = BOT_COLORS[i % BOT_COLORS.length]!;
-      const f = new Fighter(`bot-${i + 1}`, `BOT-${i + 1}`, false, scene.scene, s.x, s.y, color);
-      this.fighters.push(f);
-      this.bots.push(new Bot(f, map, this.tracers));
+    this.localId = welcome.playerId;
+    const me = welcome.entities.find((e) => e.id === welcome.playerId);
+    this.local = new LocalPlayer(scene.scene, me?.x ?? 0, me?.y ?? 0);
+    for (const e of welcome.entities) {
+      if (e.id === welcome.playerId) continue;
+      this.entities.set(e.id, new RemoteEntity(scene.scene, e, welcome.time));
     }
   }
 
-  /** 玩家距重生的剩余秒数（存活时为 0） */
-  get playerRespawnIn(): number {
-    return this.player.respawnAt === null ? 0 : Math.max(0, this.player.respawnAt - this.time);
+  /** 服务端快照 → 本地状态和解 + 远端缓冲 + 事件分发 */
+  applySnapshot(msg: SnapshotMsg): void {
+    this.serverTime = msg.time;
+    const seen = new Set<string>();
+    for (const e of msg.entities) {
+      seen.add(e.id);
+      if (e.id === this.localId) {
+        this.reconcileLocal(e);
+        continue;
+      }
+      let ent = this.entities.get(e.id);
+      if (!ent) {
+        ent = new RemoteEntity(this.scene.scene, e, msg.time);
+        this.entities.set(e.id, ent);
+      }
+      ent.applySnapshot(e, msg.time);
+    }
+    for (const [id, ent] of this.entities) {
+      if (!seen.has(id)) {
+        ent.dispose(this.scene.scene);
+        this.entities.delete(id);
+      }
+    }
+    this.handleEvents(msg.events);
   }
 
+  /** 每帧：本地预测 + 远端插值渲染 */
   update(dt: number, cmd: InputCommand, aimX: number, aimY: number): void {
-    this.time += dt;
-    const now = this.time;
-    this.inv.update(now);
+    this.localTime += dt;
+    this.inv.update(this.localTime);
     this.recoilBloom = Math.max(0, this.recoilBloom - BLOOM_DECAY * dt);
 
-    this.updateRespawns(now);
-
-    if (this.player.alive) {
-      this.updatePlayerMovement(cmd, dt);
-      this.updatePlayerAim(aimX, aimY);
-      this.handleSwitchAndReload(cmd, now);
-      this.updatePlayerFire(cmd, now);
+    if (this.local.alive) {
+      this.predictMovement(cmd, dt);
+      this.predictAim(aimX, aimY);
+      this.predictFire(cmd);
+      this.handleSwitchAndReload(cmd);
     }
+    if (cmd.firePressed) this.firePressesPending++;
 
-    const botHandlers: BotHandlers = {
-      onKill: (killer, victim, weaponId) => this.registerKill(killer, victim, weaponId),
-      onPlayerDamaged: (dmg) => this.cb.onPlayerDamaged(dmg),
-    };
-    for (const bot of this.bots) {
-      bot.update(dt, now, this.fighters, botHandlers);
-      bot.fighter.sync();
-    }
-
-    this.player.sync();
+    this.local.sync();
+    const renderTime = this.serverTime - INTERP_DELAY;
+    for (const ent of this.entities.values()) ent.render(renderTime);
     this.tracers.update(dt);
   }
 
-  private updateRespawns(now: number): void {
-    for (const f of this.fighters) {
-      if (f.alive || f.respawnAt === null || now < f.respawnAt) continue;
-      const enemies = this.fighters.filter((o) => o !== f && o.alive);
-      const s = pickSpawnFarthest(this.map, enemies);
-      f.respawn(s.x, s.y);
-      if (f === this.player) {
-        this.inv.resetAll();
+  /** 组装上行输入（~30Hz 由主循环节流调用） */
+  buildInput(cmd: InputCommand, aimX: number, aimY: number): InputMsg {
+    const alive = this.local.alive;
+    const msg: InputMsg = {
+      seq: ++this.seq,
+      moveX: alive ? cmd.moveX : 0,
+      moveY: alive ? cmd.moveY : 0,
+      aimX,
+      aimY,
+      firing: alive && cmd.firing,
+      firePressed: this.firePressesPending,
+      reload: alive && cmd.reload,
+      switchTo: alive ? cmd.switchTo : null,
+    };
+    this.firePressesPending = 0;
+    return msg;
+  }
+
+  /** 自身距重生的剩余秒数（存活时为 0） */
+  get playerRespawnIn(): number {
+    if (!this.wasDead || this.local.deathAt === null) return 0;
+    return Math.max(0, RESPAWN_DELAY - (this.localTime - this.local.deathAt));
+  }
+
+  /** 本地预测武器换弹进度（HUD 用） */
+  reloadProgress(): number | null {
+    return this.inv.reloadProgress(this.localTime);
+  }
+
+  private reconcileLocal(e: SnapshotMsg['entities'][number]): void {
+    if (e.alive) {
+      if (this.wasDead) {
+        // 刚复活：直接对齐权威位置并重置预测状态
+        this.wasDead = false;
         this.playerKillerName = null;
-        this.cb.onPlayerRespawn();
+        this.local.alive = true;
+        this.local.deathAt = null;
+        this.local.hp = e.hp;
+        this.local.kills = e.kills;
+        this.local.x = e.x;
+        this.local.y = e.y;
+        this.inv.resetAll();
+        this.recoilBloom = 0;
+        return;
+      }
+      // 位置和解（FR-N4）：误差大吸附，小则渐进修正
+      const dx = e.x - this.local.x;
+      const dy = e.y - this.local.y;
+      if (Math.hypot(dx, dy) > RECONCILE_SNAP) {
+        this.local.x = e.x;
+        this.local.y = e.y;
+      } else {
+        this.local.x += dx * RECONCILE_LERP;
+        this.local.y += dy * RECONCILE_LERP;
+      }
+      this.local.hp = e.hp;
+      this.local.kills = e.kills;
+      // 弹药漂移校正（权威优先）
+      const st = this.inv.state;
+      if (
+        Math.abs(st.ammo - e.ammo) >= AMMO_RESYNC_DIFF ||
+        Math.abs(st.reserve - e.reserve) >= AMMO_RESYNC_DIFF
+      ) {
+        this.inv.resyncAmmo(e.ammo, e.reserve);
+      }
+    } else if (!this.wasDead) {
+      // 权威死亡（击杀者由 kill 事件补充）
+      this.wasDead = true;
+      this.local.alive = false;
+      this.local.deathAt = this.localTime;
+      this.recoilBloom = 0;
+    }
+  }
+
+  private handleEvents(events: SnapshotMsg['events']): void {
+    for (const ev of events) {
+      if (ev.type === 'kill') {
+        this.cb.onKill(ev.killerName, ev.victimName, ev.weaponId);
+        if (ev.victimId === this.localId) this.playerKillerName = ev.killerName;
+      } else if (ev.type === 'hit') {
+        if (ev.shooterId === this.localId) {
+          this.cb.onPlayerHitEnemy(ev.dmg, ev.killed, ev.x, ev.y);
+        }
+        if (ev.targetId === this.localId) this.cb.onPlayerDamaged(ev.dmg);
+      } else {
+        // 远端开火曳光（本地玩家的曳光由预测即时表现）
+        if (ev.id === this.localId) continue;
+        for (const s of ev.segments) this.tracers.spawn(s[0], s[1], s[2], s[3]);
       }
     }
   }
 
-  private updatePlayerMovement(cmd: InputCommand, dt: number): void {
+  private predictMovement(cmd: InputCommand, dt: number): void {
     const len = Math.hypot(cmd.moveX, cmd.moveY);
     if (len <= 0) return;
-    const nx = this.player.x + (cmd.moveX / len) * PLAYER_SPEED * dt;
-    const ny = this.player.y + (cmd.moveY / len) * PLAYER_SPEED * dt;
+    const nx = this.local.x + (cmd.moveX / len) * PLAYER_SPEED * dt;
+    const ny = this.local.y + (cmd.moveY / len) * PLAYER_SPEED * dt;
     const r = resolveCircleWalls(this.map, nx, ny, PLAYER_RADIUS);
-    this.player.x = r.x;
-    this.player.y = r.y;
+    this.local.x = r.x;
+    this.local.y = r.y;
   }
 
-  private updatePlayerAim(aimX: number, aimY: number): void {
-    const adx = aimX - this.player.x;
-    const ady = aimY - this.player.y;
-    if (Math.hypot(adx, ady) > 0.1) {
-      this.player.aimAngle = Math.atan2(adx, ady);
-    }
+  private predictAim(aimX: number, aimY: number): void {
+    const adx = aimX - this.local.x;
+    const ady = aimY - this.local.y;
+    if (Math.hypot(adx, ady) > 0.1) this.local.angle = Math.atan2(adx, ady);
   }
 
-  private handleSwitchAndReload(cmd: InputCommand, now: number): void {
-    if (cmd.switchTo !== null) this.inv.switchTo(cmd.switchTo, now);
-    else if (cmd.wheel !== 0) this.inv.cycle(cmd.wheel > 0 ? 1 : -1, now);
-    if (cmd.reload) this.inv.startReload(now);
-  }
-
-  private updatePlayerFire(cmd: InputCommand, now: number): void {
+  /** 开火表现预测：曳光/弹药/后坐力即时反馈；伤害由服务端权威结算 */
+  private predictFire(cmd: InputCommand): void {
     const spec = this.inv.spec;
     const wantFire = spec.fireMode === 'auto' ? cmd.firing : cmd.firePressed;
     if (!wantFire) return;
 
-    if (!this.inv.canFire(now)) {
-      // 弹尽自动换弹（FR-W3）
+    if (!this.inv.canFire(this.localTime)) {
       if (this.inv.state.ammo === 0 && this.inv.state.reloadEnd === null) {
-        this.inv.startReload(now);
+        this.inv.startReload(this.localTime);
       }
       return;
     }
+    this.inv.consumeAmmo();
+    this.inv.markFired(this.localTime);
 
     const moving = Math.hypot(cmd.moveX, cmd.moveY) > 0;
     const spread = spec.spreadDeg + (moving ? spec.moveSpreadDeg : 0) + this.recoilBloom;
-    this.inv.consumeAmmo();
-    this.inv.markFired(now);
-
-    fireWeapon({
-      pool: this.tracers,
-      map: this.map,
-      shooter: this.player,
-      targets: this.fighters.filter((f) => f !== this.player && f.alive),
+    const pellets = resolveShot(
+      this.map,
+      this.local.x,
+      this.local.y,
+      this.local.angle,
+      spread,
       spec,
-      ox: this.player.x,
-      oy: this.player.y,
-      aimAngle: this.player.aimAngle,
-      spreadDeg: spread,
-      onHit: (target, dmg, _dist, killed) => this.handleHit(this.player, target, dmg, killed, spec.id),
-    });
+      [], // 客户端预测不做命中伤害（服务端权威）
+    );
+    for (const p of pellets) {
+      this.tracers.spawn(p.segment.ox, p.segment.oy, p.segment.ex, p.segment.ey);
+    }
 
     this.recoilBloom = Math.min(MAX_BLOOM, this.recoilBloom + spec.recoil * BLOOM_PER_RECOIL);
     this.scene.addShake(spec.recoil * SHAKE_PER_RECOIL);
-    if (this.inv.state.ammo === 0) this.inv.startReload(now);
+    if (this.inv.state.ammo === 0) this.inv.startReload(this.localTime);
   }
 
-  private handleHit(shooter: Fighter, target: Fighter, dmg: number, killed: boolean, weaponId: WeaponId): void {
-    if (target.isPlayer) this.cb.onPlayerDamaged(dmg);
-    else if (shooter.isPlayer) this.cb.onPlayerHitEnemy(dmg, killed, target.x, target.y);
-    if (killed) this.registerKill(shooter, target, weaponId);
-  }
-
-  private registerKill(killer: Fighter, victim: Fighter, weaponId: WeaponId): void {
-    if (killer === this.player) this.playerKills++;
-    victim.respawnAt = this.time + RESPAWN_DELAY;
-    this.cb.onKill(killer.name, victim.name, weaponId);
-    if (victim === this.player) {
-      this.playerKillerName = killer.name;
-      this.cb.onPlayerDeath();
-    }
+  private handleSwitchAndReload(cmd: InputCommand): void {
+    if (cmd.switchTo !== null) this.inv.switchTo(cmd.switchTo, this.localTime);
+    else if (cmd.wheel !== 0) this.inv.cycle(cmd.wheel > 0 ? 1 : -1, this.localTime);
+    if (cmd.reload) this.inv.startReload(this.localTime);
   }
 }

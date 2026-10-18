@@ -17,18 +17,30 @@
 - **地图即数据**：JSON tile 地图，一处定义两端使用。
 - **武器数值同源**：`packages/shared/src/weapons.ts` 单一数值源（伤害/射速/弹匣/换弹/散布/射程衰减），前后端消费同一份（FR-W5）。
 
-## M1 战斗层模块结构（客户端，M2 迁移服务端时复用 combat/shared）
+## M2 战斗/网络模块结构（2026-10-18 落地，权威服务端已实现）
 ```
+packages/shared/src/
+├─ weapons.ts    # 6 类武器数值（唯一数值源，FR-W5）
+├─ inventory.ts  # WeaponInventory 弹匣/备弹/换弹/切枪状态机（服务端权威实例 + 客户端预测实例）
+├─ combat.ts     # resolveShot 纯函数开火解算（散布/多弹丸/射线判定；两端共用杜绝分叉）
+├─ map.ts        # 地图数据 + pickSpawnFarthest（距敌最远出生点）
+├─ collision.ts  # 圆-网格碰撞解算 / DDA 射线 / rayVsAABB（含零分量加固）
+└─ protocol.ts   # join/welcome/input/snapshot + shot/hit/kill 事件（FR-N2/N7）
+
+apps/server/src/
+├─ index.ts      # HTTP 健康检查 + Socket.IO 进房（版本校验/昵称清洗/断线移除）+ smoke
+├─ room.ts       # Room：30Hz 固定步长权威模拟、输入队列限频、伤害/击杀/重生、Bot 填充
+└─ bot.ts        # 服务端 Bot 占位 AI（合成输入，与玩家同一结算管线）
+
 apps/client/src/game/
-├─ scene.ts     # Three.js 场景/相机/投影/镜头震动（纯表现）
-├─ fighter.ts   # 战斗实体（HP/受击/死亡/重生/命中盒）
-├─ weapons.ts   # 武器库存状态机（弹匣/备弹/换弹/切枪打断）
-├─ combat.ts    # 开火解算（散布/多弹丸/射线判定/射程衰减/曳光池）→ M2 移入服务端
-├─ bot.ts       # 基础 Bot 占位 AI（游走+视线点射，M3 完善状态机）
-├─ world.ts     # 对局编排（移动/开火/击杀/重生调度）→ M2 迁移至服务端模拟
-├─ hud.ts       # HUD（血条/弹药/击杀流/准星/飘字/泛红/重生界面）
-└─ input.ts     # 键鼠输入（含开火按下沿，消费型 InputCommand）
+├─ scene.ts      # Three.js 场景/相机/投影/镜头震动（纯表现）
+├─ net.ts        # socket.io-client 封装（websocket-only）
+├─ entities.ts   # RemoteEntity 快照缓冲插值(~100ms, FR-N3) + LocalPlayer 预测表现
+├─ world.ts      # NetWorld：本地移动/开火预测 + 快照和解(吸附/渐进) + 事件分发
+├─ weapons(→shared) / hud.ts / input.ts  # HUD 与输入同 M1
+scripts/net-smoke.ts  # 集成冒烟：2 模拟客户端验证进房/移动/快照/断线（corepack pnpm smoke:net）
 ```
+- **同步策略现状**：30Hz 模拟 + 30Hz 全量快照广播（JSON，规格 20~30Hz 内）；本地玩家预测+和解，远端 ~100ms 插值；延迟补偿回溯按决策 #10 后置
 
 ## 目录结构（已定稿 monorepo）
 ```

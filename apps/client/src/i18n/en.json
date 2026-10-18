@@ -20,5 +20,9 @@
   "hud.reloading": "Reloading…",
   "hud.eliminated": "ELIMINATED",
   "hud.killedBy": "Killed by {name}",
-  "hud.respawnIn": "Respawn in {s}s"
+  "hud.respawnIn": "Respawn in {s}s",
+  "net.connecting": "Connecting to server…",
+  "net.versionMismatch": "Client version mismatch — please refresh the page",
+  "net.roomFull": "Room is full, try again later",
+  "net.disconnected": "Disconnected from server"
 }

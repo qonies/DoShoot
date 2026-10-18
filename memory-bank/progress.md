@@ -13,12 +13,13 @@
 - [x] 项目体检与修复（2026-10-18，v0.2.2）：根脚本改用 `corepack pnpm` 前缀（修复命令失效）、Git 仓库初始化、FR-A1 措辞统一、i18n 收口（TDM/Hardpoint/地图名）、`BULLET_DAMAGE` 移除、`rayVsAABB` 零分量加固
 - [x] **M1 单机战斗核心（2026-10-18）**：shared 武器数值表（6 类武器 + 射程衰减）+ 客户端战斗层（fighter/weapons/combat/bot/world/hud）+ HP/死亡/重生（距敌最远出生点）+ 完整 HUD（血条/弹药/换弹条/击杀流/动态准星/命中标记/伤害飘字/受击泛红/重生界面）+ 基础 Bot（游走 + 视线点射）
   - 验收：typecheck 全过 / build 成功（gzip 129KB）/ 服务端冒烟 200 OK；60 FPS 与手感待浏览器实测
+- [x] **M2 联机 FFA（2026-10-18）**：快照/事件协议入 shared、服务端权威房间（30Hz 固定步长 + 输入校验 + 伤害/击杀/重生 + Bot 填充）、客户端插值/预测/和解、进房流程与版本校验、socket.io-client 接入
+  - 验收：`smoke:net` 集成冒烟 ALL PASS（版本拒绝/进房/移动/快照 20~30Hz/Bot 活跃/断线移除）/ typecheck 全过 / build gzip 143KB；局域网双机实测待用户验证
 
 ## 未开始
-- [ ] **M2 联机 FFA**（Socket.IO 权威模拟、快照/插值/预测、Bot 填充）——下一步
-- [ ] M3 系统完整（武器解锁、第二张地图、Bot AI 完善、音效、i18n 全覆盖）
+- [ ] **M3 系统完整**（武器解锁成长、第二张地图、Bot AI 完善、计分板/结算、音效、断线重连）——下一步
 - [ ] M4 打磨完善（优化、平衡、局域网部署说明、内部压测）
 
 ## 当前状态
-**M1 已完成**，单人完整对局可玩（`corepack pnpm dev:client`，含 5 个 Bot）。M2 联机 FFA 待启动。
+**M2 已完成**，联机 FFA 可玩（`corepack pnpm dev:server` + `dev:client`，Bot 自动填充）。M3 待启动。
 

@@ -12,20 +12,22 @@
 - **碰撞**：自研 AABB + 圆形碰撞 + 射线检测（不引入重型物理引擎）
 - **部署**：**局域网 Node 直跑（内部测试）**，无需域名/HTTPS/备案/云服务器；公网上线时再引入 Docker/Nginx（V2+，非当前范围）
 
-## 依赖清单（M0 已锁定实际版本）
+## 依赖清单（M2 更新，2026-10-18）
 - 运行时环境：Node v24.13.0；pnpm 12.14.0（**pnpm 不在 PATH，用 `corepack pnpm <cmd>` 调用**）
-- 客户端：three 0.180.0、vite 7.3.7、typescript ^5.6、@types/three ^0.180
+- 客户端：three 0.180.0、vite 7.3.7、typescript ^5.6、@types/three ^0.180、**socket.io-client 4.8.4**
 - 服务端：socket.io 4.8.4、tsx ^4.19（dev 直跑 TS）
+- workspace 根 devDeps：socket.io-client 4.8.4（供 `scripts/net-smoke.ts` 集成冒烟）
 - 共享包：`packages/shared`（TS 源码形式被两端直接引用，main/types 指向 src/index.ts）
 - pnpm 12 注意：esbuild 的 postinstall 脚本需在 `pnpm-workspace.yaml` 的 `onlyBuiltDependencies` 中显式许可（当前唯一许可项为 esbuild）
 
-## 环境与命令（2026-10-18 修复后实测可用）
+## 环境与命令（2026-10-18 实测可用）
 - Windows + PowerShell；Node v24.13.0；pnpm 经 corepack 调用：`corepack pnpm <cmd>`（pnpm 不在 PATH）
 - 根目录脚本已内置 `corepack pnpm` 前缀，可直接使用：
   - `corepack pnpm dev:client` → http://localhost:5173
   - `corepack pnpm dev:server` → http://localhost:3000
   - `corepack pnpm typecheck` / `corepack pnpm build`
   - `corepack pnpm smoke:server`（服务端自检后自动退出）
+  - `corepack pnpm smoke:net`（网络集成冒烟：起临时服务器 + 2 模拟客户端，全过自动退出）
 
 ## 约束
 - 浏览器目标：Chrome/Edge/Firefox/Safari 最新两个大版本，需支持 WebGL2；最低基线 Safari ≥ 15

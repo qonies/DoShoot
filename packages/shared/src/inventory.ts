@@ -1,13 +1,14 @@
-/** 武器库存状态机：弹匣/备弹、换弹进度、切枪打断换弹（FR-W3/W4） */
+/** 武器库存状态机（前后端同源）：弹匣/备弹、换弹进度、切枪打断换弹（FR-W3/W4/W5）
+ *  服务端为权威实例；客户端持预测实例仅用于表现，弹药漂移时按快照校正。 */
 
-import { WEAPONS, WEAPON_ORDER, fireIntervalSec, type WeaponId } from '@deadshot/shared';
+import { WEAPONS, WEAPON_ORDER, fireIntervalSec, type WeaponId } from './weapons';
 
-interface WeaponRuntime {
+export interface WeaponRuntime {
   ammo: number;
   reserve: number;
-  /** 换弹完成的对局时间（秒），null 表示未在换弹 */
+  /** 换弹完成的模拟时间（秒），null 表示未在换弹 */
   reloadEnd: number | null;
-  /** 下次可开火的对局时间（秒） */
+  /** 下次可开火的模拟时间（秒） */
   nextFireReady: number;
 }
 
@@ -16,7 +17,7 @@ const SWITCH_DELAY = 0.25;
 
 export class WeaponInventory {
   current: WeaponId = 'pistol';
-  private readonly states: Record<WeaponId, WeaponRuntime>;
+  readonly states: Record<WeaponId, WeaponRuntime>;
 
   constructor() {
     this.states = {} as Record<WeaponId, WeaponRuntime>;
@@ -39,7 +40,7 @@ export class WeaponInventory {
     return this.states[this.current];
   }
 
-  /** 重置全部武器（玩家重生时调用） */
+  /** 重置全部武器（重生时调用） */
   resetAll(): void {
     for (const id of WEAPON_ORDER) {
       const spec = WEAPONS[id];
@@ -102,5 +103,21 @@ export class WeaponInventory {
 
   markFired(now: number): void {
     this.state.nextFireReady = now + fireIntervalSec(this.spec);
+  }
+
+  /** 换弹进度 0..1；未在换弹返回 null（快照/HUD 用） */
+  reloadProgress(now: number): number | null {
+    const s = this.state;
+    if (s.reloadEnd === null) return null;
+    const total = this.spec.reloadTime;
+    return Math.min(1, Math.max(0, 1 - (s.reloadEnd - now) / total));
+  }
+
+  /** 按权威状态校正预测弹药（客户端预测漂移过大时调用） */
+  resyncAmmo(ammo: number, reserve: number): void {
+    const s = this.state;
+    s.ammo = ammo;
+    s.reserve = reserve;
+    s.reloadEnd = null;
   }
 }

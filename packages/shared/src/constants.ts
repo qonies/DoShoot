@@ -27,3 +27,7 @@ export const SIM_TICK_RATE = 30;
 /** 快照下发频率下/上限 */
 export const SNAPSHOT_RATE_MIN = 20;
 export const SNAPSHOT_RATE_MAX = 30;
+/** 房间人数上限（FFA 玩家数，FR-N6） */
+export const ROOM_CAPACITY = 10;
+/** 房间 Bot 自动填充上限（FR-B1） */
+export const BOT_FILL_MAX = 5;
