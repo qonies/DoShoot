@@ -23,51 +23,81 @@ export class Input {
   mouseClientX = window.innerWidth / 2;
   mouseClientY = window.innerHeight / 2;
 
+  private readonly canvas: HTMLCanvasElement;
   private readonly keys = new Set<string>();
   private firePressedEdge = false;
   private reloadEdge = false;
   private switchRequest: WeaponId | null = null;
   private wheelSteps = 0;
 
+  private readonly onKeyDown = (e: KeyboardEvent): void => {
+    this.keys.add(e.code);
+    if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space'].includes(e.code)) e.preventDefault();
+    if (e.code === 'KeyR') this.reloadEdge = true;
+    if (e.code.startsWith('Digit')) {
+      const n = Number(e.code.slice(5));
+      if (n >= 1 && n <= WEAPON_ORDER.length) this.switchRequest = WEAPON_ORDER[n - 1]!;
+    }
+  };
+
+  private readonly onKeyUp = (e: KeyboardEvent): void => {
+    this.keys.delete(e.code);
+  };
+
+  private readonly onMouseMove = (e: MouseEvent): void => {
+    const rect = this.canvas.getBoundingClientRect();
+    this.mouseClientX = e.clientX;
+    this.mouseClientY = e.clientY;
+    this.mouseNdcX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    this.mouseNdcY = 1 - ((e.clientY - rect.top) / rect.height) * 2;
+  };
+
+  private readonly onMouseDown = (e: MouseEvent): void => {
+    if (e.button === 0) {
+      this.firing = true;
+      this.firePressedEdge = true;
+    }
+  };
+
+  private readonly onMouseUp = (e: MouseEvent): void => {
+    if (e.button === 0) this.firing = false;
+  };
+
+  private readonly onWheel = (e: WheelEvent): void => {
+    this.wheelSteps += e.deltaY > 0 ? 1 : -1;
+  };
+
+  private readonly onContextMenu = (e: Event): void => {
+    e.preventDefault();
+  };
+
+  private readonly onBlur = (): void => {
+    this.keys.clear();
+    this.firing = false;
+  };
+
   constructor(canvas: HTMLCanvasElement) {
-    window.addEventListener('keydown', (e) => {
-      this.keys.add(e.code);
-      if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space'].includes(e.code)) e.preventDefault();
-      if (e.code === 'KeyR') this.reloadEdge = true;
-      if (e.code.startsWith('Digit')) {
-        const n = Number(e.code.slice(5));
-        if (n >= 1 && n <= WEAPON_ORDER.length) this.switchRequest = WEAPON_ORDER[n - 1]!;
-      }
-    });
-    window.addEventListener('keyup', (e) => this.keys.delete(e.code));
-    window.addEventListener('mousemove', (e) => {
-      const rect = canvas.getBoundingClientRect();
-      this.mouseClientX = e.clientX;
-      this.mouseClientY = e.clientY;
-      this.mouseNdcX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-      this.mouseNdcY = 1 - ((e.clientY - rect.top) / rect.height) * 2;
-    });
-    window.addEventListener('mousedown', (e) => {
-      if (e.button === 0) {
-        this.firing = true;
-        this.firePressedEdge = true;
-      }
-    });
-    window.addEventListener('mouseup', (e) => {
-      if (e.button === 0) this.firing = false;
-    });
-    window.addEventListener(
-      'wheel',
-      (e) => {
-        this.wheelSteps += e.deltaY > 0 ? 1 : -1;
-      },
-      { passive: true },
-    );
-    window.addEventListener('contextmenu', (e) => e.preventDefault());
-    window.addEventListener('blur', () => {
-      this.keys.clear();
-      this.firing = false;
-    });
+    this.canvas = canvas;
+    window.addEventListener('keydown', this.onKeyDown);
+    window.addEventListener('keyup', this.onKeyUp);
+    window.addEventListener('mousemove', this.onMouseMove);
+    window.addEventListener('mousedown', this.onMouseDown);
+    window.addEventListener('mouseup', this.onMouseUp);
+    window.addEventListener('wheel', this.onWheel, { passive: true });
+    window.addEventListener('contextmenu', this.onContextMenu);
+    window.addEventListener('blur', this.onBlur);
+  }
+
+  /** 移除全部全局监听（对局销毁时调用，防止重复进局后监听器叠加） */
+  destroy(): void {
+    window.removeEventListener('keydown', this.onKeyDown);
+    window.removeEventListener('keyup', this.onKeyUp);
+    window.removeEventListener('mousemove', this.onMouseMove);
+    window.removeEventListener('mousedown', this.onMouseDown);
+    window.removeEventListener('mouseup', this.onMouseUp);
+    window.removeEventListener('wheel', this.onWheel);
+    window.removeEventListener('contextmenu', this.onContextMenu);
+    window.removeEventListener('blur', this.onBlur);
   }
 
   /** WASD 八方向移动向量（已归一化） */

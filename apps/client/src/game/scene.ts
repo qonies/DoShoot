@@ -3,8 +3,6 @@
 import * as THREE from 'three';
 import {
   DEFAULT_MAP,
-  MAP_WIDTH,
-  MAP_HEIGHT,
   WALL_HEIGHT,
   isWall,
   type GameMap,
@@ -25,6 +23,7 @@ export class GameScene {
   private readonly ndc = new THREE.Vector2();
   private readonly hitPoint = new THREE.Vector3();
   private readonly proj = new THREE.Vector3();
+  private readonly onResize = (): void => this.handleResize();
 
   constructor(canvas: HTMLCanvasElement, map: GameMap = DEFAULT_MAP) {
     this.canvas = canvas;
@@ -57,12 +56,12 @@ export class GameScene {
     this.buildWalls(map);
 
     this.handleResize();
-    window.addEventListener('resize', () => this.handleResize());
+    window.addEventListener('resize', this.onResize);
   }
 
   private buildGround(map: GameMap): void {
     const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(MAP_WIDTH, MAP_HEIGHT),
+      new THREE.PlaneGeometry(map.width, map.height),
       new THREE.MeshStandardMaterial({ color: 0x2b3138, roughness: 0.95 }),
     );
     ground.rotation.x = -Math.PI / 2;
@@ -143,6 +142,12 @@ export class GameScene {
     this.camera.top = this.viewSize / 2;
     this.camera.bottom = -this.viewSize / 2;
     this.camera.updateProjectionMatrix();
+  }
+
+  /** 释放 GPU 资源与窗口监听（对局销毁时调用） */
+  dispose(): void {
+    window.removeEventListener('resize', this.onResize);
+    this.renderer.dispose();
   }
 
   render(): void {

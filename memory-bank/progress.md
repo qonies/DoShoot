@@ -15,6 +15,8 @@
   - 验收：typecheck 全过 / build 成功（gzip 129KB）/ 服务端冒烟 200 OK；60 FPS 与手感待浏览器实测
 - [x] **M2 联机 FFA（2026-10-18）**：快照/事件协议入 shared、服务端权威房间（30Hz 固定步长 + 输入校验 + 伤害/击杀/重生 + Bot 填充）、客户端插值/预测/和解、进房流程与版本校验、socket.io-client 接入
   - 验收：`smoke:net` 集成冒烟 ALL PASS（版本拒绝/进房/移动/快照 20~30Hz/Bot 活跃/断线移除）/ typecheck 全过 / build gzip 143KB；局域网双机实测待用户验证
+- [x] **客户端连接链路修复（2026-10-18）**：修复「点开始卡在连接服务器」——Vite 加 /socket.io ws 代理（开发态 5173→3000）、服务端同源托管 dist + /health（局域网设备直接访问 http://<IP>:3000）、connect_error 可见化（停重试+回大厅+i18n 提示）；smoke 退出 libuv 断言修复
+- [x] **代码体检修复（2026-10-18）**：P0 服务端换弹永不完成（room.ts step 补 `inv.update`）+ smoke:net 新增开火/换弹回归断言；P1 switchTo 白名单校验与 firePresses 积压封顶（防崩服/超射速）；P2 输入队列改「丢最旧保最新」（防停火/切枪状态消息被丢）、大厅按钮 i18n、weaponId 和解（250ms 去抖）、断线停 rAF + Input/Scene/Net 资源清理；P3 地面尺寸改 map.width/height、RemoteEntity 深度释放、FR-B1 措辞对齐 BOT_FILL_MAX=5、smoke 移动断言去出生点抖动；遗留：setInterval 非 accumulator，Windows 下 tick ≈22/s 模拟变慢（M4）
 
 ## 未开始
 - [ ] **M3 系统完整**（武器解锁成长、第二张地图、Bot AI 完善、计分板/结算、音效、断线重连）——下一步

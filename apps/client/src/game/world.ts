@@ -89,6 +89,8 @@ export class NetWorld {
   private wasDead = false;
   private seq = 0;
   private firePressesPending = 0;
+  /** 权威 weaponId 与本地预测 current 不一致的起始时刻（去抖：短暂不一致是切枪快照滞后的正常表现） */
+  private weaponMismatchSince: number | null = null;
 
   constructor(
     private readonly scene: GameScene,
@@ -194,6 +196,7 @@ export class NetWorld {
         this.local.x = e.x;
         this.local.y = e.y;
         this.inv.resetAll();
+        this.weaponMismatchSince = null;
         this.recoilBloom = 0;
         return;
       }
@@ -209,6 +212,18 @@ export class NetWorld {
       }
       this.local.hp = e.hp;
       this.local.kills = e.kills;
+      // 权威武器校正：切换输入丢失/被限频丢弃时防两端 current 分叉；
+      // ~250ms 去抖以容忍「客户端已预测切枪、服务端快照尚未跟上」的瞬时不一致
+      if (e.weaponId !== this.inv.current) {
+        if (this.weaponMismatchSince === null) {
+          this.weaponMismatchSince = this.localTime;
+        } else if (this.localTime - this.weaponMismatchSince > 0.25) {
+          this.inv.switchTo(e.weaponId, this.localTime);
+          this.weaponMismatchSince = null;
+        }
+      } else {
+        this.weaponMismatchSince = null;
+      }
       // 弹药漂移校正（权威优先）
       const st = this.inv.state;
       if (

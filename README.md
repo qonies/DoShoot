@@ -18,8 +18,17 @@ memory-bank/       # 项目记忆
 
 ```bash
 corepack pnpm install     # 安装依赖
-corepack pnpm dev:client  # 客户端开发服务器 (http://localhost:5173)
+corepack pnpm dev:client  # 客户端开发服务器 (http://localhost:5173，socket.io 经 Vite 代理连 3000)
 corepack pnpm dev:server  # 服务端 (http://localhost:3000)
 corepack pnpm typecheck   # 全量 TS 检查
 corepack pnpm build       # 全量构建
 ```
+
+## 局域网联机（免 Vite）
+
+```bash
+corepack pnpm build       # 构建客户端到 apps/client/dist
+corepack pnpm dev:server  # 服务端同源托管构建产物
+```
+
+同一局域网设备浏览器访问 `http://<本机IP>:3000` 即可加入对局（客户端与游戏服务端同源，无需代理）。

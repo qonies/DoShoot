@@ -15,6 +15,8 @@ export interface NetHandlers {
   onSnapshot?(msg: SnapshotMsg): void;
   onRejected(reason: JoinRejectedMsg['reason']): void;
   onDisconnected(): void;
+  /** 连接失败（服务端未启动/网络不可达）。socket.io 默认无限重试，由上层决定是否 close */
+  onConnectError(): void;
 }
 
 export class Net {
@@ -28,6 +30,7 @@ export class Net {
     }
     this.socket.on('joinRejected', (m: JoinRejectedMsg) => this.handlers.onRejected(m?.reason ?? 'version'));
     this.socket.on('disconnect', () => this.handlers.onDisconnected());
+    this.socket.on('connect_error', () => this.handlers.onConnectError());
   }
 
   join(msg: JoinMsg): void {

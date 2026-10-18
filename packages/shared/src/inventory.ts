@@ -56,7 +56,8 @@ export class WeaponInventory {
 
   /** 切枪（打断换弹，FR-W3）；返回是否成功切换 */
   switchTo(id: WeaponId, now: number): boolean {
-    if (id === this.current) return false;
+    // 非法 id 防御（NFR-5）：未知武器会让 spec/state 取值 undefined
+    if (!WEAPON_ORDER.includes(id) || id === this.current) return false;
     this.states[this.current].reloadEnd = null;
     this.current = id;
     this.state.nextFireReady = Math.max(this.state.nextFireReady, now + SWITCH_DELAY);

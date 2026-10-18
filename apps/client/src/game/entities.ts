@@ -93,6 +93,12 @@ export class RemoteEntity {
 
   dispose(scene: THREE.Scene): void {
     scene.remove(this.group);
+    this.group.traverse((o) => {
+      if (o instanceof THREE.Mesh) {
+        o.geometry.dispose();
+        (o.material as THREE.Material).dispose();
+      }
+    });
   }
 }
 

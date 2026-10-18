@@ -10,6 +10,7 @@ import {
   RESPAWN_DELAY,
   ROOM_CAPACITY,
   SIM_TICK_RATE,
+  WEAPON_ORDER,
   WEAPONS,
   WeaponInventory,
   damageAtRange,
@@ -36,6 +37,8 @@ const MAX_BLOOM = 9;
 const MAX_QUEUED_INPUTS = 8;
 /** 单条输入消息累积按下沿上限 */
 const MAX_PRESS_PER_MSG = 3;
+/** 半自动/泵动累计待发射按下沿上限（防超射速积压连发，NFR-5） */
+const MAX_PENDING_PRESSES = 3;
 
 /** 房间内模拟实体（玩家与 Bot 同结构，Bot 由 AI 合成输入） */
 export interface SimFighter {
@@ -112,10 +115,11 @@ export class Room {
     this.adjustBots();
   }
 
-  /** 入队玩家输入（非阻塞；队列满则丢弃，NFR-5 限频基线） */
+  /** 入队玩家输入（非阻塞；队列满时丢弃最旧一条——最新输入携带当前状态，不可丢弃，NFR-5 限频基线） */
   enqueueInput(id: string, msg: InputMsg): void {
     const q = this.inputs.get(id);
-    if (!q || q.length >= MAX_QUEUED_INPUTS) return;
+    if (!q) return;
+    if (q.length >= MAX_QUEUED_INPUTS) q.shift();
     q.push(msg);
   }
 
@@ -174,25 +178,36 @@ export class Room {
         f.input.aimX = Number(msg.aimX) || f.x;
         f.input.aimY = Number(msg.aimY) || f.y;
         f.input.firing = msg.firing === true;
-        f.firePresses += Math.min(MAX_PRESS_PER_MSG, Math.max(0, Math.floor(msg.firePressed) || 0));
+        f.firePresses = Math.min(
+          MAX_PENDING_PRESSES,
+          f.firePresses + Math.min(MAX_PRESS_PER_MSG, Math.max(0, Math.floor(msg.firePressed) || 0)),
+        );
         if (msg.reload === true) f.inv.startReload(now);
-        if (msg.switchTo !== null && msg.switchTo !== undefined) f.inv.switchTo(msg.switchTo, now);
+        // switchTo 白名单校验（NFR-5）：非法 id 会让 WEAPONS[id]/inv.state 取值 undefined 而崩溃
+        if (msg.switchTo !== null && msg.switchTo !== undefined && WEAPON_ORDER.includes(msg.switchTo)) {
+          f.inv.switchTo(msg.switchTo, now);
+        }
       }
       q.length = 0;
     }
 
-    // 2. 重生（距敌最远出生点，FR-MP3/C4）
+    // 2. 推进换弹完成（权威库存状态机；漏调会导致 reloadEnd 永不清除、弹尽后无法再开火）
+    for (const f of this.fighters.values()) {
+      f.inv.update(now);
+    }
+
+    // 3. 重生（距敌最远出生点，FR-MP3/C4）
     for (const f of this.fighters.values()) {
       if (!f.alive && f.respawnAt !== null && now >= f.respawnAt) this.respawn(f);
     }
 
-    // 3. Bot AI（合成输入，走与玩家同一管线）
+    // 4. Bot AI（合成输入，走与玩家同一管线）
     const all = [...this.fighters.values()];
     for (const f of all) {
       if (f.bot && f.alive) updateBotAI(f, now, all, this.map);
     }
 
-    // 4. 移动 / 瞄准 / 开火
+    // 5. 移动 / 瞄准 / 开火
     for (const f of all) {
       if (!f.alive) continue;
       const adx = f.input.aimX - f.x;
@@ -218,7 +233,7 @@ export class Room {
       f.bloom = Math.max(0, f.bloom - BLOOM_DECAY * dt);
     }
 
-    // 5. 快照广播（30Hz，规格 20~30Hz 内；全量 + 事件捎带）
+    // 6. 快照广播（30Hz，规格 20~30Hz 内；全量 + 事件捎带）
     const snapshot: SnapshotMsg = {
       version: PROTOCOL_VERSION,
       tick: this.tick,

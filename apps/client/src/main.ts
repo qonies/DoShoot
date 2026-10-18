@@ -44,6 +44,8 @@ function hideNetMsg(): void {
 // ---------- 连接与进房 ----------
 let connecting = false;
 let inGame = false;
+/** 当前对局循环的停止函数（断线/被拒时停止 rAF 并释放资源，防止旧循环泄漏） */
+let stopGameLoop: (() => void) | null = null;
 
 function startGame(): void {
   if (connecting || inGame) return;
@@ -59,18 +61,29 @@ function startGame(): void {
       inGame = true;
       hideNetMsg();
       document.querySelector('#hud')!.classList.remove('hidden');
-      runGameLoop(net, welcome);
+      stopGameLoop = runGameLoop(net, welcome);
     },
     onRejected: (reason) => {
       connecting = false;
+      net.close(); // 被拒后关闭连接，避免空闲 socket 泄漏（重试会新建 Net）
       backToLobby();
       showNetMsg(reason === 'full' ? 'net.roomFull' : 'net.versionMismatch');
     },
     onDisconnected: () => {
       if (inGame) {
         inGame = false;
+        stopGameLoop?.();
+        stopGameLoop = null;
+        net.close(); // 阻止 socket.io 自动重连产生孤儿连接（FR-N5 重连留 M3）
         showNetMsg('net.disconnected');
       }
+    },
+    onConnectError: () => {
+      if (inGame) return; // 对局中断线由 onDisconnected 处理
+      connecting = false;
+      net.close(); // 停止无限重试，允许用户修正后重试
+      backToLobby();
+      showNetMsg('net.connectFailed');
     },
   });
   net.join({ version: PROTOCOL_VERSION, nickname });
@@ -88,7 +101,7 @@ nicknameInput.addEventListener('keydown', (e) => {
 });
 
 // ---------- 联机对局主循环 ----------
-function runGameLoop(net: Net, welcome: WelcomeMsg): void {
+function runGameLoop(net: Net, welcome: WelcomeMsg): () => void {
   const canvas = document.querySelector<HTMLCanvasElement>('#game')!;
   const map = DEFAULT_MAP;
   const gameScene = new GameScene(canvas, map);
@@ -114,8 +127,10 @@ function runGameLoop(net: Net, welcome: WelcomeMsg): void {
   let inputAcc = 0;
   let fpsFrames = 0;
   let fpsTime = 0;
+  let running = true;
 
   function frame(now: number): void {
+    if (!running) return;
     const dt = Math.min((now - last) / 1000, 0.05);
     last = now;
 
@@ -169,4 +184,11 @@ function runGameLoop(net: Net, welcome: WelcomeMsg): void {
   }
 
   requestAnimationFrame(frame);
+
+  /** 停止循环并释放本局资源（断线/销毁时调用） */
+  return () => {
+    running = false;
+    input.destroy();
+    gameScene.dispose();
+  };
 }
