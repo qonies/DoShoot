@@ -36,6 +36,29 @@
         <div id="respawnKiller"></div>
         <div id="respawnTimer"></div>
       </div>
+      <div id="matchTimer" class="hidden"></div>
+      <div id="scoreboard" class="hidden">
+        <h3 data-i18n="sb.title"></h3>
+        <table>
+          <thead><tr><th data-i18n="sb.player"></th><th data-i18n="sb.kills"></th><th data-i18n="sb.deaths"></th></tr></thead>
+          <tbody id="sbBody"></tbody>
+        </table>
+      </div>
+      <div id="unlockBanner" class="hidden"><span id="unlockText"></span></div>
+      <div id="settlement" class="hidden">
+        <div class="panel">
+          <h2 data-i18n="settle.title"></h2>
+          <div id="settleReason"></div>
+          <table>
+            <thead><tr><th data-i18n="sb.player"></th><th data-i18n="sb.kills"></th><th data-i18n="sb.deaths"></th></tr></thead>
+            <tbody id="settleBody"></tbody>
+          </table>
+          <div class="sbtns">
+            <button id="leaveBtn" data-i18n="settle.leave"></button>
+            <button id="rematchBtn" class="primary" data-i18n="settle.rematch"></button>
+          </div>
+        </div>
+      </div>
       <div id="vignette"></div>
     </div>
 
@@ -60,7 +83,15 @@
         </label>
         <label>
           <span data-i18n="map"></span>
-          <select id="map"><option value="range"></option></select>
+          <select id="map"></select>
+        </label>
+        <label>
+          <span data-i18n="difficulty"></span>
+          <select id="difficulty">
+            <option value="easy" data-i18n="diff.easy"></option>
+            <option value="normal" selected data-i18n="diff.normal"></option>
+            <option value="hard" data-i18n="diff.hard"></option>
+          </select>
         </label>
         <div class="buttons">
           <button id="quickJoin" data-i18n="quickJoin"></button>

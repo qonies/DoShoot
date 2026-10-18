@@ -20,25 +20,27 @@
 ## M2 战斗/网络模块结构（2026-10-18 落地，权威服务端已实现）
 ```
 packages/shared/src/
-├─ weapons.ts    # 6 类武器数值（唯一数值源，FR-W5）
-├─ inventory.ts  # WeaponInventory 弹匣/备弹/换弹/切枪状态机（服务端权威实例 + 客户端预测实例）
+├─ weapons.ts    # 6 类武器数值（唯一数值源，FR-W5）+ WEAPON_TIERS 解锁链（M3：每类 3 级，T2@8杀/T3@20杀）
+├─ inventory.ts  # WeaponInventory 弹匣/备弹/换弹/切枪状态机 + tierSpecs 层级覆盖（服务端权威实例 + 客户端预测实例）
 ├─ combat.ts     # resolveShot 纯函数开火解算（散布/多弹丸/射线判定；两端共用杜绝分叉）
-├─ map.ts        # 地图数据 + pickSpawnFarthest（距敌最远出生点）
+├─ map.ts        # 地图数据 + MAPS 注册表（M3：range 靶场 + alley 狭巷）+ pickSpawnFarthest
 ├─ collision.ts  # 圆-网格碰撞解算 / DDA 射线 / rayVsAABB（含零分量加固）
-└─ protocol.ts   # join/welcome/input/snapshot + shot/hit/kill 事件（FR-N2/N7）
+└─ protocol.ts   # join/welcome/input/snapshot + shot/hit/kill/unlock/matchEnd/matchReset 事件（协议 v2，FR-N2/N7）
 
 apps/server/src/
-├─ index.ts      # HTTP 健康检查 + Socket.IO 进房（版本校验/昵称清洗/断线移除）+ smoke
-├─ room.ts       # Room：30Hz accumulator 固定步长权威模拟、输入队列限频、伤害/击杀/重生、Bot 填充
-└─ bot.ts        # 服务端 Bot 占位 AI（合成输入，与玩家同一结算管线）
+├─ index.ts      # HTTP 健康检查 + Socket.IO RoomManager（M3：按地图多房间/快速加入/空房回收/断线重连会话映射）+ smoke
+├─ room.ts       # Room：30Hz accumulator 固定步长权威模拟、输入队列限频、伤害/击杀/重生、Bot 填充、对局生命周期（30杀/5min → rematch）
+└─ bot.ts        # 服务端 Bot AI（M3：巡逻/追击/低血躲避状态机 + BFS 网格寻路 + 三档难度画像，WeakMap 状态）
 
 apps/client/src/game/
 ├─ scene.ts      # Three.js 场景/相机/投影/镜头震动（纯表现）
-├─ net.ts        # socket.io-client 封装（websocket-only）
+├─ audio.ts      # WebAudio 合成音效（M3：射击/命中/击杀/换弹/死亡/解锁/结算；首次交互初始化）
+├─ net.ts        # socket.io-client 封装（websocket-only + sendRematch）
 ├─ entities.ts   # RemoteEntity 快照缓冲插值(~100ms, FR-N3) + LocalPlayer 预测表现
-├─ world.ts      # NetWorld：本地移动/开火预测 + 快照和解(seq ack + 输入重放) + 事件分发
-├─ weapons(→shared) / hud.ts / input.ts  # HUD 与输入同 M1
-scripts/net-smoke.ts  # 集成冒烟：2 模拟客户端验证进房/移动/快照/断线（corepack pnpm smoke:net）
+├─ world.ts      # NetWorld：本地预测 + 快照和解(seq ack + 输入重放) + 事件分发（unlock/matchEnd/进度持久化回调）
+├─ hud.ts        # HUD + 计分板(Tab)/结算面板/解锁横幅/对局倒计时（M3 扩展）
+├─ weapons(→shared) / input.ts  # 输入同 M1
+scripts/net-smoke.ts  # 集成冒烟：按地图惰性建房模拟服务端 + 模拟客户端验证进房/移动/快照/重连/双地图（corepack pnpm smoke:net）
 ```
 - **同步策略现状**：30Hz accumulator 模拟 + 按唤醒频率 22~30Hz 全量快照广播（JSON）；本地玩家预测 + 和解（seq ack + 未确认输入重放），远端 ~100ms 插值；延迟补偿回溯按决策 #10 后置
 

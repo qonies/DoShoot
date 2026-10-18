@@ -19,10 +19,14 @@
 - [x] **代码体检修复（2026-10-18）**：P0 服务端换弹永不完成（room.ts step 补 `inv.update`）+ smoke:net 新增开火/换弹回归断言；P1 switchTo 白名单校验与 firePresses 积压封顶（防崩服/超射速）；P2 输入队列改「丢最旧保最新」（防停火/切枪状态消息被丢）、大厅按钮 i18n、weaponId 和解（250ms 去抖）、断线停 rAF + Input/Scene/Net 资源清理；P3 地面尺寸改 map.width/height、RemoteEntity 深度释放、FR-B1 措辞对齐 BOT_FILL_MAX=5、smoke 移动断言去出生点抖动；遗留：setInterval 非 accumulator，Windows 下 tick ≈22/s 模拟变慢（M4）
 - [x] **服务端 tick/预测和解/资源释放修复（2026-10-18，v0.2.5）**：room.ts accumulator 固定步长（修复 Windows tick≈22/s、模拟 0.73× 变慢，快照改每唤醒聚合广播、实测 28/s）；FR-N4 和解接通 seq（EntitySnapshot.lastSeq + 客户端未确认输入重放，替代朴素 lerp）；瞄准坐标 `Number.isFinite` 修复；scene dispose 深度释放 + forceContextLoss；smoke 退出改自然排空（去 win32 libuv 断言）；死代码清理（CELL_SIZE/PROTOCOL 删除，MAP_*/SNAPSHOT_RATE_* 启用）与文档同步
 
+- [x] **全量体检 + 冒烟竞态修复（2026-10-18）**：typecheck/build/smoke:server/smoke:net 全过；修复 smoke:net fire/reload 断言竞态盲区（站桩换弹期间被 Bot 击杀重生会被误判为回归失败 → waitForAlive 死亡感知中断 + 3 次重试）；修复客户端连接握手期断线死锁（卡「正在连接服务器」→ 按 connectFailed 收场）；清理死代码 waitFor
+- [x] **小修收尾（2026-10-18）**：smoke:net 端口改系统分配临时端口（并行双跑实测不冲突）；昵称 2~16 字符客户端前置校验 + lobby.nameInvalid 中英文案（空输入回退随机名）
+- [x] **M3 系统完整（2026-10-18）**：武器解锁成长（每类 3 级链 T2@8/T3@20 杀 + localStorage 持久化 + 全屏提示，协议 v2）+ 第二张地图「狭巷」与 RoomManager 多房间（大厅地图/难度选择、快速加入、空房 60s 回收）+ Bot AI 状态机（巡逻/追击/低血躲避 + BFS 寻路 + 三档难度）+ FFA 对局生命周期（30 杀/5 分钟 → 结算面板 → 再来一局）+ 断线重连（30s 宽限 + rejoinId 回原状态）+ WebAudio 合成音效
+  - 验收：typecheck 全过 / build gzip 147KB / smoke:server 通过（protocol v2）/ smoke:net 连续 2 轮 ALL PASS（新增 FR-N5 宽限+重连、第二地图房间、协议 v2 字段断言）；双机实测与 60 FPS 待用户验证
+
 ## 未开始
-- [ ] **M3 系统完整**（武器解锁成长、第二张地图、Bot AI 完善、计分板/结算、音效、断线重连）——下一步
-- [ ] M4 打磨完善（优化、平衡、局域网部署说明、内部压测）
+- [ ] **M4 打磨完善**（性能优化、平衡性调参、局域网部署与使用说明、中英文案全量校对、内部压测；含后置项：FR-U2 小地图、FR-S2/S3 音频增强、FR-L5 设置界面）——下一步
 
 ## 当前状态
-**M2 已完成**，联机 FFA 可玩（`corepack pnpm dev:server` + `dev:client`，Bot 自动填充）。M3 待启动。
+**M3 已完成**，完整可玩 FFA 产品（武器解锁成长 + 双地图多房间 + Bot AI 三档难度 + 计分板/结算/再来一局 + 断线重连 + 基础音效）。M4 待启动。
 

@@ -1,7 +1,7 @@
 /** 武器库存状态机（前后端同源）：弹匣/备弹、换弹进度、切枪打断换弹（FR-W3/W4/W5）
  *  服务端为权威实例；客户端持预测实例仅用于表现，弹药漂移时按快照校正。 */
 
-import { WEAPONS, WEAPON_ORDER, fireIntervalSec, type WeaponId } from './weapons';
+import { WEAPONS, WEAPON_ORDER, fireIntervalSec, type WeaponId, type WeaponSpec } from './weapons';
 
 export interface WeaponRuntime {
   ammo: number;
@@ -18,38 +18,48 @@ const SWITCH_DELAY = 0.25;
 export class WeaponInventory {
   current: WeaponId = 'pistol';
   readonly states: Record<WeaponId, WeaponRuntime>;
+  /** 各武器层级数值覆盖（FR-W1 解锁链；未覆盖的类回落 WEAPONS 基础值） */
+  private readonly tierSpecs: Partial<Record<WeaponId, WeaponSpec>> = {};
 
   constructor() {
     this.states = {} as Record<WeaponId, WeaponRuntime>;
     for (const id of WEAPON_ORDER) {
-      const spec = WEAPONS[id];
-      this.states[id] = {
-        ammo: spec.magSize,
-        reserve: spec.reserveAmmo,
-        reloadEnd: null,
-        nextFireReady: 0,
-      };
+      this.states[id] = this.freshRuntime(id);
     }
   }
 
+  /** 层级解算后的运行时初始状态（弹匣/备弹按当前层级数值） */
+  private freshRuntime(id: WeaponId): WeaponRuntime {
+    const spec = this.tierSpecs[id] ?? WEAPONS[id];
+    return { ammo: spec.magSize, reserve: spec.reserveAmmo, reloadEnd: null, nextFireReady: 0 };
+  }
+
   get spec() {
-    return WEAPONS[this.current];
+    return this.tierSpecs[this.current] ?? WEAPONS[this.current];
   }
 
   get state(): WeaponRuntime {
     return this.states[this.current];
   }
 
-  /** 重置全部武器（重生时调用） */
+  /** 应用层级数值（FR-W1 解锁）：若为当前武器，满新弹匣作为升级奖励 */
+  setTierSpec(id: WeaponId, spec: WeaponSpec): void {
+    this.tierSpecs[id] = spec;
+    if (id === this.current) {
+      this.state.ammo = spec.magSize;
+      this.state.reloadEnd = null;
+    }
+  }
+
+  /** 按当前层级取某武器的满弹匣/备弹运行时（重置/重生用） */
+  private resetRuntime(id: WeaponId): void {
+    this.states[id] = this.freshRuntime(id);
+  }
+
+  /** 重置全部武器（重生时调用；保留已解锁层级） */
   resetAll(): void {
     for (const id of WEAPON_ORDER) {
-      const spec = WEAPONS[id];
-      this.states[id] = {
-        ammo: spec.magSize,
-        reserve: spec.reserveAmmo,
-        reloadEnd: null,
-        nextFireReady: 0,
-      };
+      this.resetRuntime(id);
     }
     this.current = 'pistol';
   }

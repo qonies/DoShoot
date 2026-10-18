@@ -2,10 +2,11 @@
  *  运行：corepack pnpm smoke:net（自动退出，退出码 0 = 通过） */
 
 import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { Server } from 'socket.io';
 import { io as Client, type Socket } from 'socket.io-client';
 import {
-  DEFAULT_MAP,
+  MAPS,
   PROTOCOL_VERSION,
   SNAPSHOT_RATE_MAX,
   SNAPSHOT_RATE_MIN,
@@ -15,23 +16,56 @@ import {
 } from '@DoShoot/shared';
 import { Room } from '../apps/server/src/room';
 
-const PORT = 3100;
+/** 端口由系统分配（listen(0)，回调内赋值）——防并行运行或残留进程占用固定端口导致 EADDRINUSE */
+let PORT = 0;
 const httpServer = createServer(() => {});
 const io = new Server(httpServer, { cors: { origin: true } });
-const room = new Room(io, DEFAULT_MAP, 'smoke');
+/** 房间按地图惰性创建（与 index.ts RoomManager 同语义的最小子集，FR-MP2/L3） */
+const rooms = new Map<string, Room>();
+const sessions = new Map<string, Room>();
+function roomFor(mapId: string | undefined): Room {
+  const id = mapId && MAPS[mapId] ? mapId : 'range';
+  let r = rooms.get(id);
+  if (!r) {
+    r = new Room(io, MAPS[id]!, `smoke-${id}`);
+    rooms.set(id, r);
+  }
+  return r;
+}
 
 io.on('connection', (socket) => {
-  socket.on('join', (raw: { version: number; nickname: string }) => {
+  let joined = false;
+  socket.on('join', (raw: { version: number; nickname: string; mapId?: string; rejoinId?: string }) => {
     if (!raw || raw.version !== PROTOCOL_VERSION) {
       socket.emit('joinRejected', { reason: 'version' });
       return;
     }
+    // FR-N5 断线重连（与 index.ts 同语义）：宽限期内凭原 playerId 恢复
+    const rejoinId = typeof raw.rejoinId === 'string' ? raw.rejoinId : null;
+    if (rejoinId) {
+      for (const r of rooms.values()) {
+        if (r.hasFighter(rejoinId) && r.isDisconnected(rejoinId) && r.tryRejoin(rejoinId)) {
+          joined = true;
+          sessions.set(socket.id, r);
+          socket.emit('welcome', r.welcome(rejoinId));
+          return;
+        }
+      }
+    }
+    const room = roomFor(raw.mapId);
     room.addPlayer(socket.id, raw.nickname || 'P');
+    joined = true;
+    sessions.set(socket.id, room);
     socket.join(room.id);
     socket.emit('welcome', room.welcome(socket.id));
   });
-  socket.on('input', (m: InputMsg) => room.enqueueInput(socket.id, m));
-  socket.on('disconnect', () => room.removePlayer(socket.id));
+  socket.on('input', (m: InputMsg) => {
+    if (joined) sessions.get(socket.id)?.enqueueInput(socket.id, m);
+  });
+  socket.on('disconnect', () => {
+    sessions.get(socket.id)?.markDisconnected(socket.id); // FR-N5：宽限期内保留实体
+    sessions.delete(socket.id);
+  });
 });
 
 interface ClientState {
@@ -42,7 +76,7 @@ interface ClientState {
   seq: number;
 }
 
-function makeClient(nickname: string): Promise<ClientState> {
+function makeClient(nickname: string, mapId?: string): Promise<ClientState> {
   const state: ClientState = { socket: Client(`http://localhost:${PORT}`, { transports: ['websocket'] }), welcome: null, snapshots: [], inputTimer: null, seq: 0 };
   return new Promise((resolve, reject) => {
     const to = setTimeout(() => reject(new Error(`${nickname}: welcome timeout`)), 3000);
@@ -51,12 +85,13 @@ function makeClient(nickname: string): Promise<ClientState> {
       clearTimeout(to);
       // 持续发送移动 + 瞄准输入（30Hz）；朝地图中心按主导轴移动——
       // 任意出生点到中心沿主导轴均有 ≥2.1 单位的无遮挡路径，避免贴边出生点导致位移断言抖动
+      const cx = w.entities.length > 0 ? 20 : 20;
       state.inputTimer = setInterval(() => {
         const me = state.snapshots.at(-1)?.entities.find((e) => e.id === w.playerId);
         const x = me?.x ?? w.entities[0]?.x ?? 20;
         const y = me?.y ?? w.entities[0]?.y ?? 20;
-        const dx = 20 - x;
-        const dy = 20 - y;
+        const dx = cx - x;
+        const dy = cx - y;
         const moveX = Math.abs(dx) >= Math.abs(dy) ? Math.sign(dx) : 0;
         const moveY = Math.abs(dx) >= Math.abs(dy) ? 0 : Math.sign(dy);
         state.socket.emit('input', {
@@ -70,7 +105,7 @@ function makeClient(nickname: string): Promise<ClientState> {
     });
     state.socket.on('snapshot', (s: SnapshotMsg) => state.snapshots.push(s));
     state.socket.connect();
-    state.socket.emit('join', { version: PROTOCOL_VERSION, nickname });
+    state.socket.emit('join', mapId ? { version: PROTOCOL_VERSION, nickname, mapId } : { version: PROTOCOL_VERSION, nickname });
   });
 }
 
@@ -81,13 +116,15 @@ function fail(msg: string): never {
 }
 
 function cleanup(): void {
-  room.destroy();
+  for (const r of rooms.values()) r.destroy();
+  rooms.clear();
   io.close();
   httpServer.close();
 }
 
 httpServer.listen(PORT, () => {
-  console.log(`[smoke:net] server on :${PORT}`);
+  PORT = (httpServer.address() as AddressInfo).port;
+  console.log(`[smoke:net] server on :${PORT} (ephemeral)`);
   run();
 });
 
@@ -119,7 +156,7 @@ async function run(): Promise<void> {
     const start1 = c1.welcome!.entities.find((e) => e.id === c1.welcome!.playerId)!;
     const moved = Math.hypot(me1.x - start1.x, me1.y - start1.y);
     if (moved < 1.5) fail(`player should move with input, moved=${moved.toFixed(2)}`);
-    if (me1.x < 1 || me1.x > DEFAULT_MAP.width - 1 || me1.y < 1 || me1.y > DEFAULT_MAP.height - 1) {
+    if (me1.x < 1 || me1.x > MAPS['range']!.width - 1 || me1.y < 1 || me1.y > MAPS['range']!.height - 1) {
       fail(`player escaped map bounds: (${me1.x}, ${me1.y})`);
     }
     console.log(`[smoke:net] movement OK (moved ${moved.toFixed(1)} units, pos ${me1.x.toFixed(1)},${me1.y.toFixed(1)})`);
@@ -148,6 +185,7 @@ async function run(): Promise<void> {
     console.log(`[smoke:net] bots active OK (${movingBots}/${bots.length} moving)`);
 
     // 4b) 开火 + 换弹结算（回归：服务端权威换弹必须能完成；断言基于快照状态等待，对 tick 速率鲁棒）
+    // 站桩换弹期间可能被 Bot 击杀并重生（重置为满弹手枪）——每次尝试死亡感知中断，最多重试 3 次
     if (c1.inputTimer) clearInterval(c1.inputTimer);
     c1.inputTimer = null;
     const p1 = c1.welcome!.playerId;
@@ -163,37 +201,88 @@ async function run(): Promise<void> {
         switchTo,
       } satisfies InputMsg);
     };
-    // 切到 SMG（全自动，900rpm 弹匣 30）并按住开火，直到快照观察到弹匣打空
-    let switchCount = 0;
-    const fireTimer = setInterval(() => {
-      switchCount++;
-      fireInput(true, switchCount <= 30 ? 'smg' : null);
-    }, 33);
-    const emptied = await waitFor(
-      () => meAt()?.alive === true && meAt()?.weaponId === 'smg' && meAt()?.ammo === 0,
-      8000,
-    );
-    clearInterval(fireTimer);
-    fireInput(false); // 停火（服务端丢最旧保最新，该消息必然生效）
-    // 等待弹尽自动换弹完成（弹匣回满 30）
-    const reloaded = await waitFor(
-      () => meAt()?.alive === true && meAt()?.weaponId === 'smg' && meAt()?.ammo === 30,
-      8000,
-    );
-    if (meAt()?.alive === false) {
-      console.log('[smoke:net] fire/reload check SKIPPED (shooter died)');
-    } else if (!emptied || !reloaded) {
-      fail(`fire/reload regression: emptied=${emptied} reloaded=${reloaded} last=${JSON.stringify(meAt())}`);
+    const died = (): boolean => meAt()?.alive === false;
+    /** 轮询等待 pred，等待期间被击杀立即以 'dead' 中断（区别于超时，供上层重试） */
+    const waitForAlive = async (pred: () => boolean, timeoutMs: number): Promise<'ok' | 'dead' | 'timeout'> => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        if (died()) return 'dead';
+        if (pred()) return 'ok';
+        await sleep(50);
+      }
+      return died() ? 'dead' : pred() ? 'ok' : 'timeout';
+    };
+
+    let fireReloadOk = false;
+    for (let attempt = 0; attempt < 3 && !fireReloadOk; attempt++) {
+      if (attempt > 0) console.log('[smoke:net] fire/reload check interrupted (killed by bot), retrying after respawn');
+      // 等待复活满状态（首尝试立即通过）
+      if ((await waitForAlive(() => meAt()?.alive === true, 6000)) !== 'ok') break;
+      // 切到 SMG（全自动，900rpm 弹匣 30）并按住开火，直到快照观察到弹匣打空
+      let switchCount = 0;
+      const fireTimer = setInterval(() => {
+        switchCount++;
+        fireInput(true, switchCount <= 30 ? 'smg' : null);
+      }, 33);
+      const emptied = await waitForAlive(
+        () => meAt()?.weaponId === 'smg' && meAt()?.ammo === 0,
+        8000,
+      );
+      clearInterval(fireTimer);
+      fireInput(false); // 停火（服务端丢最旧保最新，该消息必然生效）
+      if (emptied !== 'ok') continue; // 中途死亡或超时 → 重试
+      // 等待弹尽自动换弹完成（弹匣回满 30）
+      const reloaded = await waitForAlive(
+        () => meAt()?.weaponId === 'smg' && meAt()?.ammo === 30,
+        8000,
+      );
+      if (reloaded === 'ok') fireReloadOk = true;
+    }
+    if (!fireReloadOk) {
+      fail(`fire/reload regression after retries: last=${JSON.stringify(meAt())}`);
     } else {
       console.log('[smoke:net] fire+reload OK (mag emptied → auto-reload completed)');
     }
 
-    // 5) 断线移除
+    // 5) 断线移除（FR-N5 语义由服务端宽限期承接；此处断开后 30s 内仍可见，故直接校验「最终移除」窗口）
+    //    为保持冒烟快速，这里断开 c1 并等待其进入宽限期后仍存在 → 跳过旧的「立即移除」断言，
+    //    改为验证重连凭据流程：c2 断开后以 rejoinId 重进应成功。
     c1.socket.disconnect();
-    await sleep(800);
-    const after = c2.snapshots.at(-1)!.entities.some((e) => e.id === c1.welcome!.playerId);
-    if (after) fail('disconnected player still in snapshot');
-    console.log('[smoke:net] disconnect removal OK');
+    await sleep(300);
+    // 宽限期内：c1 实体仍在快照中（残影，FR-N5）
+    const duringGrace = c2.snapshots.at(-1)!.entities.some((e) => e.id === c1.welcome!.playerId);
+    if (!duringGrace) fail('disconnected player should stay in snapshot during reconnect grace (FR-N5)');
+    console.log('[smoke:net] disconnect grace-period retention OK (FR-N5)');
+
+    // FR-N5 重连：以 rejoinId 回到原状态（应恢复原 playerId）
+    const rejoined = Client(`http://localhost:${PORT}`, { transports: ['websocket'] });
+    const rejoinOk = await new Promise<boolean>((resolve) => {
+      const to = setTimeout(() => resolve(false), 3000);
+      rejoined.on('welcome', (w: WelcomeMsg) => {
+        clearTimeout(to);
+        resolve(w.playerId === c1.welcome!.playerId);
+        rejoined.close();
+      });
+      rejoined.connect();
+      rejoined.emit('join', {
+        version: PROTOCOL_VERSION,
+        nickname: 'Tester-1',
+        rejoinId: c1.welcome!.playerId,
+      });
+    });
+    if (!rejoinOk) fail('rejoin with original playerId failed (FR-N5)');
+    console.log('[smoke:net] rejoin restores original player id OK (FR-N5)');
+
+    // 6) 第二张地图房间（FR-MP2/L3）：mapId=alley 进房独立房间，协议 v2 新字段校验
+    const c3 = await makeClient('Tester-3', 'alley');
+    await sleep(300); // 等待至少若干帧快照
+    if (c3.welcome!.mapId !== 'alley') fail(`expected alley map, got ${c3.welcome!.mapId}`);
+    if (c3.welcome!.progress === undefined) fail('welcome.progress missing (FR-W1/A1)');
+    const c3snap = c3.snapshots.at(-1);
+    if (!c3snap || c3snap.matchTimeLeft == null) fail('snapshot.matchTimeLeft missing (FR-U5/M1)');
+    if (c3snap.entities.some((e) => e.deaths === undefined)) fail('EntitySnapshot.deaths missing (FR-M4)');
+    console.log(`[smoke:net] second map room OK (mapId=${c3.welcome!.mapId}, matchTimeLeft=${Math.round(c3snap.matchTimeLeft!)}s)`);
+    c3.socket.close();
 
     c2.socket.close();
     if (c1.inputTimer) clearInterval(c1.inputTimer);
@@ -208,14 +297,4 @@ async function run(): Promise<void> {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
-}
-
-/** 轮询等待条件成立（对服务端 tick 速率波动鲁棒） */
-async function waitFor(pred: () => boolean, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (pred()) return true;
-    await sleep(50);
-  }
-  return pred();
 }

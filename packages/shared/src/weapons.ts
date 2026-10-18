@@ -163,3 +163,97 @@ export function damageAtRange(spec: WeaponSpec, dist: number): number {
   const f = (dist - spec.fullDamageRange) / (spec.maxRange - spec.fullDamageRange);
   return spec.damage * (1 - f * (1 - spec.minDamageMult));
 }
+
+// ---------- 武器解锁链（FR-W1：按类累计击杀数升级，跨局进度见 FR-A1） ----------
+
+export interface WeaponTier {
+  spec: WeaponSpec;
+  /** 达到该层级所需的该类累计击杀数（T1 恒 0） */
+  killsRequired: number;
+}
+
+/** 每类武器一条 3 级解锁链：T1 基础 → T2（8 杀）→ T3（20 杀）；id 保持类 id（协议/槽位不变，仅数值与名称升级） */
+export const WEAPON_TIERS: Record<WeaponId, WeaponTier[]> = {
+  pistol: [
+    { spec: WEAPONS.pistol, killsRequired: 0 },
+    {
+      spec: { ...WEAPONS.pistol, nameKey: 'weapon.pistol.t2', damage: 18, pellets: 2, rpm: 420, magSize: 24, reloadTime: 1.8, reserveAmmo: 144, spreadDeg: 2.2, moveSpreadDeg: 3.5, fullDamageRange: 14, maxRange: 28, minDamageMult: 0.45, recoil: 0.8 },
+      killsRequired: 8,
+    },
+    {
+      spec: { ...WEAPONS.pistol, nameKey: 'weapon.pistol.t3', damage: 55, pellets: 1, rpm: 200, magSize: 6, reloadTime: 2.6, reserveAmmo: 48, spreadDeg: 0.8, moveSpreadDeg: 2.5, fullDamageRange: 22, maxRange: 40, minDamageMult: 0.6, recoil: 2.2 },
+      killsRequired: 20,
+    },
+  ],
+  smg: [
+    { spec: WEAPONS.smg, killsRequired: 0 },
+    {
+      spec: { ...WEAPONS.smg, nameKey: 'weapon.smg.t2', damage: 17, rpm: 960, magSize: 35, reloadTime: 1.7, reserveAmmo: 175, spreadDeg: 3.0, moveSpreadDeg: 3.4, fullDamageRange: 13, maxRange: 26, recoil: 0.5 },
+      killsRequired: 8,
+    },
+    {
+      spec: { ...WEAPONS.smg, nameKey: 'weapon.smg.t3', damage: 19, rpm: 1020, magSize: 40, reloadTime: 1.8, reserveAmmo: 200, spreadDeg: 2.7, moveSpreadDeg: 3.2, fullDamageRange: 14, maxRange: 28, recoil: 0.45 },
+      killsRequired: 20,
+    },
+  ],
+  ar: [
+    { spec: WEAPONS.ar, killsRequired: 0 },
+    {
+      spec: { ...WEAPONS.ar, nameKey: 'weapon.ar.t2', damage: 30, rpm: 560, magSize: 25, reloadTime: 1.9, reserveAmmo: 125, spreadDeg: 1.4, moveSpreadDeg: 3.0, fullDamageRange: 22, maxRange: 42, minDamageMult: 0.55, recoil: 1.0 },
+      killsRequired: 8,
+    },
+    {
+      spec: { ...WEAPONS.ar, nameKey: 'weapon.ar.t3', damage: 34, rpm: 520, magSize: 25, reloadTime: 2.0, reserveAmmo: 125, spreadDeg: 1.2, moveSpreadDeg: 2.8, fullDamageRange: 24, maxRange: 45, minDamageMult: 0.6, recoil: 1.1 },
+      killsRequired: 20,
+    },
+  ],
+  shotgun: [
+    { spec: WEAPONS.shotgun, killsRequired: 0 },
+    {
+      spec: { ...WEAPONS.shotgun, nameKey: 'weapon.shotgun.t2', damage: 9, pellets: 9, rpm: 75, magSize: 7, reloadTime: 2.4, reserveAmmo: 35, spreadDeg: 5.0, fullDamageRange: 8, maxRange: 18, recoil: 3.4 },
+      killsRequired: 8,
+    },
+    {
+      spec: { ...WEAPONS.shotgun, nameKey: 'weapon.shotgun.t3', damage: 6, pellets: 10, fireMode: 'auto', rpm: 240, magSize: 8, reloadTime: 2.8, reserveAmmo: 40, spreadDeg: 6.0, moveSpreadDeg: 2.5, fullDamageRange: 6, maxRange: 14, minDamageMult: 0.2, recoil: 2.5 },
+      killsRequired: 20,
+    },
+  ],
+  sniper: [
+    { spec: WEAPONS.sniper, killsRequired: 0 },
+    {
+      spec: { ...WEAPONS.sniper, nameKey: 'weapon.sniper.t2', damage: 125, rpm: 48, reloadTime: 2.6, reserveAmmo: 25, spreadDeg: 0.15, moveSpreadDeg: 6, fullDamageRange: 48, maxRange: 75, minDamageMult: 0.85, recoil: 4.8 },
+      killsRequired: 8,
+    },
+    {
+      spec: { ...WEAPONS.sniper, nameKey: 'weapon.sniper.t3', damage: 150, rpm: 40, magSize: 4, reloadTime: 3.0, reserveAmmo: 20, spreadDeg: 0.1, moveSpreadDeg: 7, fullDamageRange: 55, maxRange: 85, minDamageMult: 0.9, recoil: 5.5 },
+      killsRequired: 20,
+    },
+  ],
+  lmg: [
+    { spec: WEAPONS.lmg, killsRequired: 0 },
+    {
+      spec: { ...WEAPONS.lmg, nameKey: 'weapon.lmg.t2', damage: 24, rpm: 680, magSize: 100, reloadTime: 3.8, reserveAmmo: 300, spreadDeg: 3.6, moveSpreadDeg: 5, fullDamageRange: 19, maxRange: 38, recoil: 1.4 },
+      killsRequired: 8,
+    },
+    {
+      spec: { ...WEAPONS.lmg, nameKey: 'weapon.lmg.t3', damage: 22, rpm: 820, magSize: 90, reloadTime: 4.0, reserveAmmo: 270, spreadDeg: 4.2, moveSpreadDeg: 5.5, fullDamageRange: 17, maxRange: 34, recoil: 1.5 },
+      killsRequired: 20,
+    },
+  ],
+};
+
+/** 按该类累计击杀数解算当前层级（0 起） */
+export function tierForKills(classId: WeaponId, classKills: number): number {
+  const tiers = WEAPON_TIERS[classId]!;
+  let tier = 0;
+  for (let i = 1; i < tiers.length; i++) {
+    if (classKills >= tiers[i]!.killsRequired) tier = i;
+  }
+  return tier;
+}
+
+/** 取指定层级的武器数值（越界钳制到最高层） */
+export function specForTier(classId: WeaponId, tier: number): WeaponSpec {
+  const tiers = WEAPON_TIERS[classId]!;
+  return tiers[Math.max(0, Math.min(tier, tiers.length - 1))]!.spec;
+}

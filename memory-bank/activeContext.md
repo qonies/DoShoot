@@ -1,7 +1,28 @@
 # 活动上下文（Active Context）
 
 ## 当前焦点
-**M2 联机 FFA 已完成并通过验收** — 下一步进入 M3 系统完整。
+**M3 系统完整已完成并通过冒烟验收** — 下一步进入 M4 打磨完善。
+
+## 最近变更（2026-10-18 · M3 系统完整）
+- **武器解锁成长（FR-W1/W4/A1/B5）**：`weapons.ts` 新增 `WEAPON_TIERS`（每类 3 级链：T1→T2@8杀→T3@20杀，id 保持类 id、仅数值/名称升级，含 T3 自动霰弹枪等 12 个新数值变体）+ `tierForKills`/`specForTier`；`inventory.ts` 支持 `tierSpecs` 覆盖（`setTierSpec` 对当前武器奖励满新弹匣、`resetAll` 保留层级）；服务端 `registerKill` 按类计数并跨阈值广播 `unlock` 事件（Bot 击杀同计入 FR-B5）；进房 `progress` 基线（localStorage `DoShoot.progress`）在 `applyProgress` 中恢复层级；客户端 `world.ts` 收 unlock 事件同步层级 + 全屏解锁横幅 + 琶音音效
+- **第二张地图 + 多房间（FR-MP2/L3/L4/N6）**：`map.ts` 新增「狭巷」32×32（四角建筑群+中央广场+十字巷道）与 `MAPS` 注册表 + `getMap`；服务端 `index.ts` RoomManager（按地图选房人最多者、quick join 全局人最多非满房、空房 60s 回收巡检）；大厅地图/Bot 难度下拉（数据驱动填充）；WelcomeMsg 新增 `mapId`（客户端按其渲染场景）
+- **Bot AI 重写（FR-B2/B3/B4）**：`bot.ts` 巡逻/追击/低血躲避状态机 + BFS 网格寻路（Int32Array 队列、LOS 拐角裁剪、卡墙重算）+ 三档难度画像（easy/normal/hard：移速 0.5/0.65/0.8、瞄准误差 7/4/1.8°、反应延迟、开火间隔、交战距离、走位激进度）；`botSpeedOf` 供 room 移动结算；WeakMap 存状态不污染 SimFighter
+- **对局生命周期（FR-M1/M4/U5）**：Room `matchStart/matchOver`——30 杀或 300s 结束 → `matchEnd` 事件（standings 按 kills 降序/deaths 升序）；结束后冻结开火与重生；`rematch()` 重置 kills/deaths 并全员重生（生涯解锁进度保留）；结算面板（再来一局=发 rematch 消息 / 返回大厅=断线）；HUD 顶部对局倒计时（`SnapshotMsg.matchTimeLeft`）
+- **断线重连（FR-N5）**：`markDisconnected` 保留实体 30s（输入清零、宽限内不消费输入不参与 AI）；step 开头清扫超时者；`tryRejoin` 恢复原 fighterId；客户端 sessionStorage `DoShoot.playerId` + join 带 `rejoinId`；fighterId 与 socket.id 解耦（`sessions` 映射）
+- **音效（FR-S1 子集）**：新增 `audio.ts`（WebAudio 合成免素材：噪声+低通+包络的枪声按武器音色/距离衰减、命中 tick、击杀双音、换弹咔哒、死亡滑音、解锁琶音、结算旋律）；`sfx.ensure()` 在 startGame 首次交互时初始化
+- **协议 v2（FR-N7）**：PROTOCOL_VERSION=2；EntitySnapshot+deaths、Snapshot+matchTimeLeft、WelcomeMsg+mapId/progress、JoinMsg+mapId/difficulty/rejoinId/progress、kill 事件+killerId、新事件 unlock/matchEnd/matchReset（StandingRow 类型）
+- **冒烟加固（smoke:net）**：冒烟服务器改按地图惰性建房（与 RoomManager 同语义子集）+ sessions 映射；新增断言：FR-N5 宽限保留 + rejoin 恢复原 playerId、第二地图房间（mapId=alley）、welcome.progress/deaths/matchTimeLeft 字段存在；旧「断线立即移除」断言按新语义替换
+- **验证**：typecheck 三包全过 / build 成功（gzip 147KB）/ smoke:server 通过（protocol v2）/ smoke:net 连续 2 轮 ALL PASS
+- **简化与后置（M4）**：FR-M4 武器统计简化为 K/D；FR-U2 小地图、FR-S2 空间音频、FR-S3 BGM、FR-L5 设置界面后置；60 FPS 浏览器实测仍待用户验证
+
+## 最近变更（2026-10-18 · 全量体检 + 冒烟竞态修复）
+- **体检结论**：typecheck 三包全过 / build 成功（gzip 143KB）/ smoke:server 通过 / smoke:net 通过；文档与代码一致性良好（需求 v0.2.5 ↔ 实现对齐；M3 未做项均有记录）
+- **P2 smoke:net fire/reload 竞态盲区（已修复）**：原断言的死亡豁免检查只在 8s 等待超时后执行一次——测试者站桩等换弹期间被 Bot 击杀并重生（重置为满弹手枪、回到出生点）时，快照呈 alive:true + pistol 满弹，误判为换弹回归失败（实测复现一次）。改为 `waitForAlive`（等待中检测死亡立即以 'dead' 中断，区别于超时）+ 最多 3 次重试（每次先等复活满状态）；顺手删除失去引用的旧 `waitFor`
+- **P3 客户端连接握手期断线死锁（已修复）**：`main.ts` onDisconnected 只处理 inGame 分支——建连后、welcome 前断开（如服务端恰在进房握手时重启）会永久卡「正在连接服务器」（socket.io 自动重连但 join 不重发）。补 `else if (connecting)` 分支按 connectFailed 收场
+- **P3 冒烟端口防冲突（已修复）**：`net-smoke.ts` 固定 `:3100` 改为 `listen(0)` 系统分配临时端口（回调内取 `address().port`），并行/残留进程占用不再 EADDRINUSE——实测并行双跑分别落 ：57965/:57967 均 ALL PASS
+- **P3 昵称客户端校验（已修复，FR-L1）**：`main.ts` startGame 前置 2~16 字符校验（与服务端 sanitizeNickname 一致），非法时 `lobby.nameInvalid` i18n 提示并中止进房（消除「被服务端静默改名 P-xxxx」的无感知体验）；空输入回退随机名（提取 `randomName()` 复用初始默认逻辑）；zh/en 文案同步
+- **注意**：`memory-bank/techContext.md` 存在一处先前会话遗留的未提交改动（冒烟端口已改临时分配，原「并行重跑 EADDRINUSE」注意事项不再适用）
+- 验证：typecheck 全过 / smoke:net 连续 2 轮 ALL PASS（22/s 快照率在断言区间内）
 
 ## 最近变更（2026-10-18 · tick/和解/资源释放体检修复）
 - **P1 服务端 accumulator 固定步长（已修复）**：`room.ts` 由裸 `setInterval`（Windows 下实际 tick≈22/s，模拟时间以 0.73× 流逝，移速/射速/换弹全部偏慢）改为 accumulator 循环——interval 仅按 `1000/SNAPSHOT_RATE_MAX` 唤醒，模拟按累积真实时间推进（`dt=1/30` 恒定；停顿 >250ms 丢弃积压、单次唤醒 ≤8 步防追步风暴）；快照改为每次唤醒聚合广播一次（跨步事件合并），实测 28/s 回到规格内

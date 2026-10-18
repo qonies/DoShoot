@@ -21,11 +21,14 @@
 - pnpm 12 注意：esbuild 的 postinstall 需显式许可，**pnpm 12 用 `pnpm-workspace.yaml` 的 `allowBuilds`（包名→布尔映射），旧字段 `onlyBuiltDependencies` 已失效**（否则 install 报 ERR_PNPM_IGNORED_BUILDS 退出码 1）
 
 ## 仓库与凭据（2026-10-18）
-- GitHub：`qonies/DoShoot`（私有），remote origin 已配置，主分支 main
+- GitHub：`qonies/DoShoot`（**public**，2026-10-18 由 private 改为 public），remote origin 已配置，主分支 main
+- Release：v0.2.5 已发布（tag v0.2.5 + release notes，无构建产物 assets）
 - 凭据助手配置在**仓库本地**：`git config credential.helper "!gh auth git-credential"`（gh CLI 已登录 qonies；本机 HOME 指向自定义目录导致 gh 无法写全局 .gitconfig，故用仓库级配置）
 
 ## 环境与命令（2026-10-18 实测可用）
 - Windows + PowerShell；Node v24.13.0；pnpm 经 corepack 调用：`corepack pnpm <cmd>`（pnpm 不在 PATH）
+- **网络协议 v2（M3）**：JoinMsg+mapId/difficulty/rejoinId/progress；EntitySnapshot+deaths；Snapshot+matchTimeLeft；WelcomeMsg+mapId/progress；事件含 unlock/matchEnd/matchReset——前后端经 PROTOCOL_VERSION 强校验，不匹配拒绝进房
+- 客户端构建 gzip ≈ 147KB（M3 含音效/计分板/结算后，M2 时 143KB）
 - 根目录脚本已内置 `corepack pnpm` 前缀，可直接使用：
   - `corepack pnpm dev:client` → http://localhost:5173
   - `corepack pnpm dev:server` → http://localhost:3000

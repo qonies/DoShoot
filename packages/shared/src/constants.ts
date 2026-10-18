@@ -19,7 +19,7 @@ export const RESPAWN_DELAY = 2.5;
 export const HITBOX_HALF = 0.45;
 
 /** 网络协议版本（见 FR-N7） */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 /** 服务端固定步长模拟频率（见 FR-N2） */
 export const SIM_TICK_RATE = 30;
 /** 快照广播频率下/上限（Hz）：广播间隔 = 1000/MAX（每次唤醒聚合多步事件），下限由冒烟断言校验 */
@@ -29,3 +29,14 @@ export const SNAPSHOT_RATE_MAX = 30;
 export const ROOM_CAPACITY = 10;
 /** 房间 Bot 自动填充上限（FR-B1） */
 export const BOT_FILL_MAX = 5;
+
+/** Bot AI 三档难度（FR-B3，大厅可选，默认中等） */
+export type BotDifficulty = 'easy' | 'normal' | 'hard';
+
+/** 对局结束条件（FR-M1）：先到 30 杀或 5 分钟时限 */
+export const MATCH_KILL_TARGET = 30;
+export const MATCH_TIME_LIMIT = 300;
+/** 断线重连宽限（秒，FR-N5）：超时视为离开并移除 */
+export const RECONNECT_GRACE = 30;
+/** 空房间回收（毫秒，FR-N6） */
+export const ROOM_RECYCLE_MS = 60_000;

@@ -9,13 +9,17 @@ import {
   WeaponInventory,
   resolveCircleWalls,
   resolveShot,
+  specForTier,
+  tierForKills,
   type GameMap,
   type InputMsg,
   type SnapshotMsg,
+  type StandingRow,
   type WeaponId,
   type WelcomeMsg,
 } from '@DoShoot/shared';
 import { GameScene } from './scene';
+import { sfx } from './audio';
 import { INTERP_DELAY, LocalPlayer, RemoteEntity } from './entities';
 import type { InputCommand } from './input';
 
@@ -23,6 +27,14 @@ export interface WorldCallbacks {
   onKill(killerName: string, victimName: string, weaponId: WeaponId): void;
   onPlayerDamaged(dmg: number): void;
   onPlayerHitEnemy(dmg: number, killed: boolean, wx: number, wy: number): void;
+  /** 本人对某武器类解锁新层级（FR-W1 全屏提示） */
+  onUnlock(nameKey: string): void;
+  /** 本人击杀（FR-A1：客户端按类累计并持久化到 localStorage） */
+  onOwnKill(classId: WeaponId): void;
+  /** 对局结束（FR-M4 结算面板） */
+  onMatchEnd(reason: 'kills' | 'time', standings: StandingRow[]): void;
+  /** 再来一局重置（FR-M4：关闭结算面板） */
+  onMatchReset(): void;
 }
 
 const BLOOM_PER_RECOIL = 0.6;
@@ -94,6 +106,15 @@ export class NetWorld {
   private inputDtAcc = 0;
   /** 权威 weaponId 与本地预测 current 不一致的起始时刻（去抖：短暂不一致是切枪快照滞后的正常表现） */
   private weaponMismatchSince: number | null = null;
+  /** 最新快照实体（Tab 计分板 FR-U1） */
+  lastEntities: SnapshotMsg['entities'] = [];
+  /** 对局剩余秒数（FR-U5 倒计时）；已结束为 null */
+  matchTimeLeft: number | null = null;
+  private matchOver = false;
+
+  get isMatchOver(): boolean {
+    return this.matchOver;
+  }
 
   constructor(
     private readonly scene: GameScene,
@@ -105,15 +126,27 @@ export class NetWorld {
     this.localId = welcome.playerId;
     const me = welcome.entities.find((e) => e.id === welcome.playerId);
     this.local = new LocalPlayer(scene.scene, me?.x ?? 0, me?.y ?? 0);
+    // 应用进房进度基线（FR-W1/A1）：同步本地 HUD 武器层级
+    for (const id of Object.keys(welcome.progress ?? {}) as WeaponId[]) {
+      const kills = welcome.progress![id] ?? 0;
+      const tier = tierForKills(id, kills);
+      if (tier > 0) this.inv.setTierSpec(id, specForTier(id, tier));
+    }
     for (const e of welcome.entities) {
       if (e.id === welcome.playerId) continue;
       this.entities.set(e.id, new RemoteEntity(scene.scene, e, welcome.time));
     }
   }
 
+  get selfId(): string {
+    return this.localId;
+  }
+
   /** 服务端快照 → 本地状态和解 + 远端缓冲 + 事件分发 */
   applySnapshot(msg: SnapshotMsg): void {
     this.serverTime = msg.time;
+    this.matchTimeLeft = msg.matchTimeLeft;
+    this.lastEntities = msg.entities;
     const seen = new Set<string>();
     for (const e of msg.entities) {
       seen.add(e.id);
@@ -247,6 +280,7 @@ export class NetWorld {
       this.local.alive = false;
       this.local.deathAt = this.localTime;
       this.recoilBloom = 0;
+      sfx.death();
       // 死亡期间输入不被消费（服务端清队列、不 ack）；丢弃待重放输入，防止复活时位置漂移
       this.pendingInputs = [];
       this.firePressesPending = 0;
@@ -257,16 +291,42 @@ export class NetWorld {
     for (const ev of events) {
       if (ev.type === 'kill') {
         this.cb.onKill(ev.killerName, ev.victimName, ev.weaponId);
+        if (ev.killerId === this.localId) {
+          this.cb.onOwnKill(ev.weaponId); // FR-A1：本人击杀 → 客户端持久化进度
+          sfx.kill();
+        }
         if (ev.victimId === this.localId) this.playerKillerName = ev.killerName;
       } else if (ev.type === 'hit') {
         if (ev.shooterId === this.localId) {
           this.cb.onPlayerHitEnemy(ev.dmg, ev.killed, ev.x, ev.y);
+          sfx.hit();
         }
-        if (ev.targetId === this.localId) this.cb.onPlayerDamaged(ev.dmg);
-      } else {
-        // 远端开火曳光（本地玩家的曳光由预测即时表现）
+        if (ev.targetId === this.localId) {
+          this.cb.onPlayerDamaged(ev.dmg);
+          sfx.hurt();
+        }
+      } else if (ev.type === 'shot') {
+        // 远端开火曳光 + 按距离衰减的枪声（本地玩家的开火由预测即时表现）
         if (ev.id === this.localId) continue;
+        const o = ev.segments[0];
+        const dist = o ? Math.hypot(o[0] - this.local.x, o[1] - this.local.y) : 0;
+        sfx.shoot(ev.weaponId, dist);
         for (const s of ev.segments) this.tracers.spawn(s[0], s[1], s[2], s[3]);
+      } else if (ev.type === 'unlock') {
+        if (ev.id !== this.localId) continue;
+        this.inv.setTierSpec(ev.classId, specForTier(ev.classId, ev.tier));
+        sfx.unlock();
+        this.cb.onUnlock(ev.nameKey);
+      } else if (ev.type === 'matchEnd') {
+        this.matchOver = true;
+        sfx.matchEnd();
+        this.cb.onMatchEnd(ev.reason, ev.standings);
+      } else if (ev.type === 'matchReset') {
+        this.matchOver = false;
+        this.pendingInputs = [];
+        this.firePressesPending = 0;
+        this.weaponMismatchSince = null;
+        this.cb.onMatchReset();
       }
     }
   }
@@ -300,12 +360,13 @@ export class NetWorld {
 
     if (!this.inv.canFire(this.localTime)) {
       if (this.inv.state.ammo === 0 && this.inv.state.reloadEnd === null) {
-        this.inv.startReload(this.localTime);
+        this.startReloadPredicted();
       }
       return;
     }
     this.inv.consumeAmmo();
     this.inv.markFired(this.localTime);
+    sfx.shoot(spec.id);
 
     const moving = Math.hypot(cmd.moveX, cmd.moveY) > 0;
     const spread = spec.spreadDeg + (moving ? spec.moveSpreadDeg : 0) + this.recoilBloom;
@@ -324,12 +385,17 @@ export class NetWorld {
 
     this.recoilBloom = Math.min(MAX_BLOOM, this.recoilBloom + spec.recoil * BLOOM_PER_RECOIL);
     this.scene.addShake(spec.recoil * SHAKE_PER_RECOIL);
-    if (this.inv.state.ammo === 0) this.inv.startReload(this.localTime);
+    if (this.inv.state.ammo === 0) this.startReloadPredicted();
+  }
+
+  /** 预测侧开始换弹（含音效；弹尽自动换弹与手动 R 共用） */
+  private startReloadPredicted(): void {
+    if (this.inv.startReload(this.localTime)) sfx.reload();
   }
 
   private handleSwitchAndReload(cmd: InputCommand): void {
     if (cmd.switchTo !== null) this.inv.switchTo(cmd.switchTo, this.localTime);
     else if (cmd.wheel !== 0) this.inv.cycle(cmd.wheel > 0 ? 1 : -1, this.localTime);
-    if (cmd.reload) this.inv.startReload(this.localTime);
+    if (cmd.reload) this.startReloadPredicted();
   }
 }

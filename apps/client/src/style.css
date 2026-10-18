@@ -461,3 +461,167 @@ body {
   font-size: 15px;
   text-align: center;
 }
+
+/* ---------- M3：对局倒计时 / 计分板 / 解锁横幅 / 结算面板 ---------- */
+
+/* 对局倒计时（FR-U5，顶部居中） */
+#matchTimer {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #e6ecf1;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+}
+
+/* Tab 计分板（FR-U1） */
+#scoreboard {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 8;
+  padding: 18px 24px;
+  background: rgba(13, 17, 22, 0.92);
+  border: 1px solid #2c3440;
+  border-radius: 12px;
+  color: #e6ecf1;
+}
+
+#scoreboard h3 {
+  text-align: center;
+  font-size: 15px;
+  letter-spacing: 2px;
+  color: #ffb74d;
+  margin-bottom: 10px;
+}
+
+#scoreboard table,
+#settlement table {
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+#scoreboard th,
+#scoreboard td,
+#settlement th,
+#settlement td {
+  padding: 4px 18px;
+  text-align: left;
+}
+
+#scoreboard th,
+#settlement th {
+  color: #78909c;
+  font-weight: 500;
+  font-size: 12px;
+  border-bottom: 1px solid #2c3440;
+}
+
+#scoreboard tr.me td,
+#settlement tr.me td {
+  color: #ffb74d;
+  font-weight: 700;
+}
+
+/* 武器解锁全屏横幅（FR-W1） */
+#unlockBanner {
+  position: fixed;
+  top: 22%;
+  left: 0;
+  right: 0;
+  z-index: 9;
+  text-align: center;
+  animation: unlockPop 2.6s ease-out forwards;
+}
+
+#unlockText {
+  display: inline-block;
+  padding: 14px 40px;
+  background: rgba(13, 17, 22, 0.85);
+  border: 1px solid #ffb74d;
+  border-radius: 12px;
+  color: #ffb74d;
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: 3px;
+  text-shadow: 0 2px 12px rgba(255, 183, 77, 0.5);
+}
+
+@keyframes unlockPop {
+  0% { opacity: 0; transform: scale(0.85); }
+  12% { opacity: 1; transform: scale(1); }
+  80% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* 结算面板（FR-M4；需要接收按钮点击） */
+#settlement {
+  position: fixed;
+  inset: 0;
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 10, 13, 0.7);
+  pointer-events: auto;
+}
+
+#settlement .panel {
+  width: 420px;
+  padding: 28px;
+  background: #171c22;
+  border: 1px solid #2c3440;
+  border-radius: 14px;
+  color: #e6ecf1;
+  text-align: center;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+#settlement h2 {
+  font-size: 26px;
+  letter-spacing: 3px;
+  color: #ffb74d;
+  margin-bottom: 6px;
+}
+
+#settleReason {
+  color: #90a4ae;
+  font-size: 14px;
+  margin-bottom: 16px;
+}
+
+#settlement table {
+  width: 100%;
+  margin-bottom: 18px;
+}
+
+#settlement .sbtns {
+  display: flex;
+  gap: 10px;
+}
+
+#settlement button {
+  flex: 1;
+  height: 42px;
+  border: none;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  color: #e6ecf1;
+  background: #2c3440;
+  transition: filter 0.15s;
+}
+
+#settlement button:hover {
+  filter: brightness(1.2);
+}
+
+#settlement button.primary {
+  background: #ff9800;
+  color: #1a1207;
+}

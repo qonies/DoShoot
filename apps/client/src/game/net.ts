@@ -41,6 +41,11 @@ export class Net {
     this.socket.emit('input', msg);
   }
 
+  /** 再来一局（FR-M4，仅对局结束后由结算面板触发） */
+  sendRematch(): void {
+    this.socket.emit('rematch');
+  }
+
   close(): void {
     this.socket.close();
   }
