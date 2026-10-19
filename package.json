@@ -3,6 +3,7 @@
   "version": "0.3.1",
   "private": true,
   "description": "DoShoot Web — 浏览器多人在线俯视角射击游戏（对标 deadshot.io）",
+  "license": "MIT",
   "engines": {
     "node": ">=20"
   },
