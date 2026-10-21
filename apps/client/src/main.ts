@@ -35,10 +35,16 @@ const settings = loadSettings();
 applyAudioSettings(settings);
 
 const langBtn = document.querySelector<HTMLButtonElement>('#langBtn')!;
-langBtn.textContent = getLang() === 'zh' ? 'EN' : '中文';
+/** 不走 data-i18n 的动态语言 UI：大厅切换按钮标签 + 对局内操作提示（对局中切语言需同步刷新） */
+let hintElRef: HTMLElement | null = null;
+function refreshLangUi(): void {
+  langBtn.textContent = getLang() === 'zh' ? 'EN' : '中文';
+  if (hintElRef) hintElRef.textContent = t('hint');
+}
+refreshLangUi();
 langBtn.addEventListener('click', () => {
-  const l = toggleLang();
-  langBtn.textContent = l === 'zh' ? 'EN' : '中文';
+  toggleLang();
+  refreshLangUi();
 });
 
 const nicknameInput = document.querySelector<HTMLInputElement>('#nickname')!;
@@ -47,7 +53,11 @@ function randomName(): string {
 }
 nicknameInput.value = localStorage.getItem(NICKNAME_KEY) ?? randomName();
 
-// 地图下拉（FR-L3/MP2：数据驱动，从 shared MAPS 注册表填充）
+// 地图下拉（FR-L3/MP2：数据驱动 + 「随机」项；随机 = mapId 缺省，由服务端任意分配，同快速加入语义）
+const randomOpt = document.createElement('option');
+randomOpt.value = 'random';
+randomOpt.dataset.i18n = 'map.random'; // 挂 data-i18n：切换语言时 applyDom 同步刷新（FR-L6/NFR-9）
+randomOpt.textContent = t('map.random');
 const mapSelect = document.querySelector<HTMLSelectElement>('#map')!;
 mapSelect.replaceChildren(
   ...Object.values(MAPS).map((m) => {
@@ -57,6 +67,7 @@ mapSelect.replaceChildren(
     opt.textContent = t(m.nameKey);
     return opt;
   }),
+  randomOpt,
 );
 const difficultySelect = document.querySelector<HTMLSelectElement>('#difficulty')!;
 
@@ -102,7 +113,11 @@ function startGame(kind: 'quick' | 'map'): void {
     return;
   }
   connecting = true;
-  localStorage.setItem(NICKNAME_KEY, nickname);
+  try {
+    localStorage.setItem(NICKNAME_KEY, nickname);
+  } catch {
+    /* localStorage 不可用时忽略（与进度/设置/i18n 写入点同等保护） */
+  }
   document.querySelector('#lobby')!.classList.add('hidden');
   showNetMsg('net.connecting');
   sfx.ensure(); // 首次用户交互初始化音频（浏览器自动播放策略，FR-S1）
@@ -151,7 +166,7 @@ function startGame(kind: 'quick' | 'map'): void {
   net.join({
     version: PROTOCOL_VERSION,
     nickname,
-    mapId: kind === 'quick' ? undefined : mapSelect.value || 'range',
+    mapId: kind === 'quick' || mapSelect.value === 'random' ? undefined : mapSelect.value || 'range',
     difficulty: difficultySelect.value as 'easy' | 'normal' | 'hard',
     rejoinId: sessionStorage.getItem(PLAYER_ID_KEY),
     progress: loadProgress(),
@@ -159,7 +174,11 @@ function startGame(kind: 'quick' | 'map'): void {
 }
 
 function backToLobby(): void {
-  document.querySelector('#settings')!.classList.add('hidden'); // 防止残留打开状态带入下一局
+  // 关闭/复位全部对局内覆盖层：断线时可能正打开结算/计分板/重生遮罩/解锁横幅，
+  // 不复位会随 #hud 一起被隐藏，但下一局 showGameLoop 后残留显示（stopGameLoop 已移除 keyup 监听无法再收起）
+  for (const id of ['settings', 'scoreboard', 'settlement', 'respawn', 'unlockBanner']) {
+    document.querySelector(`#${id}`)!.classList.add('hidden');
+  }
   document.querySelector('#lobby')!.classList.remove('hidden');
   document.querySelector('#hud')!.classList.add('hidden');
 }
@@ -202,6 +221,7 @@ function runGameLoop(net: Net, welcome: WelcomeMsg): () => void {
 
   const hintEl = document.querySelector<HTMLElement>('#hint')!;
   hintEl.textContent = t('hint');
+  hintElRef = hintEl; // 语言切换时同步刷新（refreshLangUi）
   const fpsEl = document.querySelector<HTMLElement>('#fps')!;
 
   net.socket.on('snapshot', (msg: SnapshotMsg) => world.applySnapshot(msg));
@@ -226,7 +246,11 @@ function runGameLoop(net: Net, welcome: WelcomeMsg): () => void {
   const onLeave = (): void => {
     hud.hideSettlement();
     hud.hideScoreboard();
-    net.close(); // 服务端按断线处理（FR-N5 宽限期内重连可回原状态）
+    // 主动离开：先落本地状态再关连接，避免 disconnect 回调误报「连接已断开」并重复清理
+    inGame = false;
+    stopGameLoop?.();
+    stopGameLoop = null;
+    net.close(); // 服务端按断线处理（FR-N5：30s 宽限期内重新开始可凭 rejoinId 回原对局）
     backToLobby();
   };
   document.querySelector('#rematchBtn')!.addEventListener('click', onRematch);
@@ -269,6 +293,7 @@ function runGameLoop(net: Net, welcome: WelcomeMsg): () => void {
   });
   langSel.addEventListener('change', () => {
     setLang(langSel.value as 'zh' | 'en'); // i18n 模块持久化 + applyDom（含小地图外的全部 data-i18n）
+    refreshLangUi(); // 按钮标签/操作提示不走 data-i18n，需手动刷新
   });
 
   let last = performance.now();

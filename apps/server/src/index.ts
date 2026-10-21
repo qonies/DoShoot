@@ -43,7 +43,8 @@ const httpServer = createServer(async (req, res) => {
   // 同源托管客户端构建产物（客户端 io('/') 直连本服务端；路径规范化 + 前缀校验防目录穿越）
   if (existsSync(DIST_DIR)) {
     const file = path.normalize(path.join(DIST_DIR, url.pathname === '/' ? 'index.html' : url.pathname));
-    if (file.startsWith(DIST_DIR)) {
+    // 严格前缀（含路径分隔符）：裸 startsWith(DIST_DIR) 会放行 dist-xxx 等兄弟目录
+    if (file === DIST_DIR || file.startsWith(DIST_DIR + path.sep)) {
       try {
         const data = await readFile(file);
         res.writeHead(200, {
@@ -156,6 +157,8 @@ io.on('connection', (socket) => {
     const difficulty: BotDifficulty =
       raw.difficulty === 'easy' || raw.difficulty === 'hard' ? raw.difficulty : 'normal';
     const room = rooms.pick(mapId, difficulty);
+    // 防御性检查：pick() 的契约为「只返回有容量的房间或新建房间」，full 当前不可达；
+    // 保留该分支以约束契约回归（协议 JoinRejectReason='full' 已与客户端约定）
     if (!room.hasCapacity) {
       socket.emit('joinRejected', { reason: 'full' });
       return;

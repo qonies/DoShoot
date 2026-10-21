@@ -4,7 +4,7 @@
 - **渲染**：Three.js（WebGL2，正交/小透视俯视角相机）
 - **语言**：TypeScript（全栈）
 - **构建**：Vite
-- **服务端**：Node.js + Socket.IO（已定稿，不使用 Colyseus，房间管理自研）；强制 websocket-only transport，禁用轮询回退与消息缓冲
+- **服务端**：Node.js + Socket.IO（已定稿，不使用 Colyseus，房间管理自研）；客户端强制 websocket-only transport（禁轮询回退）；服务端未强制禁 polling/消息缓冲（内网可信环境，非浏览器客户端可协商 transport）
 - **多语言**：自研轻量 i18n（JSON 资源文件），中/英双语，默认跟随浏览器语言
 - **Bot 假人**：正式功能——状态机 AI（巡逻/追击/躲避）+ 网格寻路，三档难度，与真人同管线
 - **网络模型**：权威服务端；**固定步长模拟 30Hz，快照下发 20~30Hz**；远端玩家缓冲插值 + 本地预测 + 服务端和解
@@ -23,6 +23,8 @@
 ## 仓库与凭据（2026-10-18）
 - GitHub：`qonies/DoShoot`（**public**，2026-10-18 由 private 改为 public），remote origin 已配置，主分支 main
 - Release：**v0.3.1 已发布**（tag v0.3.1 + release notes，无构建产物 assets，内容覆盖 M3 系统完整 + M4 打磨完善）；历史 v0.2.5
+- **开源协议：MIT**（2026-10-18 落地：根 LICENSE 文件 + 根 package.json `license: MIT` + README 协议章节与徽章；commit 269c9d9 已推送）
+- **GitHub 简介**（gh repo edit 已设置）：浏览器多人在线俯视角射击游戏（对标 deadshot.io）：TypeScript + Three.js + Socket.IO 权威服务端，快照插值/预测与和解/延迟补偿，武器解锁、Bot AI、中英双语。MIT 开源。另附 topics：game/multiplayer/threejs/socketio/typescript/websocket/shooter
 - 凭据助手配置在**仓库本地**：`git config credential.helper "!gh auth git-credential"`（gh CLI 已登录 qonies；本机 HOME 指向自定义目录导致 gh 无法写全局 .gitconfig，故用仓库级配置）
 
 ## 环境与命令（2026-10-18 实测可用）

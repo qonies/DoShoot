@@ -24,6 +24,10 @@ const scan = (src: string): void => {
   for (const m of src.matchAll(/\bt\('([^']+)'\)/g)) used.add(m[1]!);
   for (const m of src.matchAll(/\bt\("([^"]+)"\)/g)) used.add(m[1]!);
   for (const m of src.matchAll(/data-i18n="([^"]+)"/g)) used.add(m[1]!);
+  // 间接引用：文案键经变量传入 t() 的包装函数（如 showNetMsg(key)）——
+  // 此前只扫 t('…') 导致 lobby.nameInvalid 缺键漏检（实际显示原始 key）
+  for (const m of src.matchAll(/\bshowNetMsg\('([^']+)'\)/g)) used.add(m[1]!);
+  for (const m of src.matchAll(/\bshowNetMsg\("([^"]+)"\)/g)) used.add(m[1]!);
 };
 const walk = (dir: string): void => {
   for (const name of readdirSync(dir)) {

@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import {
   PLAYER_RADIUS,
   PLAYER_SPEED,
+  PROTOCOL_VERSION,
   RESPAWN_DELAY,
   WeaponInventory,
   resolveCircleWalls,
@@ -144,6 +145,7 @@ export class NetWorld {
 
   /** 服务端快照 → 本地状态和解 + 远端缓冲 + 事件分发 */
   applySnapshot(msg: SnapshotMsg): void {
+    if (msg.version !== PROTOCOL_VERSION) return; // FR-N7：丢弃版本不匹配的快照（防旧服务端污染预测状态）
     this.serverTime = msg.time;
     this.matchTimeLeft = msg.matchTimeLeft;
     this.lastEntities = msg.entities;
@@ -279,6 +281,7 @@ export class NetWorld {
       this.wasDead = true;
       this.local.alive = false;
       this.local.deathAt = this.localTime;
+      this.local.hp = e.hp; // 血条按权威值清零，否则 HUD 停留在死亡前数值
       this.recoilBloom = 0;
       sfx.death();
       // 死亡期间输入不被消费（服务端清队列、不 ack）；丢弃待重放输入，防止复活时位置漂移

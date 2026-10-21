@@ -1,7 +1,27 @@
 # 活动上下文（Active Context）
 
 ## 当前焦点
-**M4 打磨完善已落地（协议仍 v2，增量兼容）** — 待用户局域网多设备实测验收（60 FPS / 双机开黑 / 平衡性反馈）。
+**M4 打磨完善已落地（协议仍 v2，增量兼容）+ 体检修复（2026-10-21）** — 待用户局域网多设备实测验收（60 FPS / 双机开黑 / 平衡性反馈），**重点回归：进局→返回大厅→再进局的渲染**。
+
+## 最近变更（2026-10-21 · 体检修复落地）
+- **P1 渲染**：`scene.ts` 移除 `renderer.forceContextLoss()`——同 canvas 重建 renderer 时 getContext 返回已丢失上下文（无 restoreContext 不恢复），二次进局有黑屏风险；`dispose()` 已足够释放资源
+- **P1 i18n**：昵称校验键统一为 `lobby.nameInvalid`（zh/en 同步）；`scripts/i18n-check.ts` 增加 `showNetMsg('…')` 包装函数键扫描（修复缺键漏检，该键此前实际显示原始 key）
+- **P1 输入**：`input.ts` mousedown/wheel 判 `e.target` 是否在 `#settings/#settlement` 内——设置/结算面板上点击与滚动不再误触开火/切枪
+- **P1 延迟补偿**：`room.ts` `respawn(f, now)` 清空并重写 `hist`（修复复活后最长 ~400ms 按「死亡前旧坐标」回溯命中的幽灵命中盒）
+- **P1 HUD**：`world.ts` 死亡分支补 `local.hp = e.hp`（血条按权威值清零）
+- **P2 服务端**（`room.ts`/`index.ts`）：输入超时 250ms 清空最后意图（`SimFighter.lastInputAt`，防停发输入持续移动/开火，NFR-5）；空房 `adjustBots` 清零 Bot（省 CPU）；`applyProgress` 单类击杀钳制 ≤999（防伪造满级）；静态托管 DIST_DIR 严格前缀校验（含 `path.sep`）；`full` 拒绝分支保留并注明契约
+- **P2 客户端**：`world.applySnapshot` 丢弃版本不匹配快照（FR-N7）；`backToLobby` 复位 scoreboard/settlement/respawn/unlockBanner 残留；`onLeave` 先落 `inGame=false` + `stopGameLoop` 再关连接（主动离开不再误报「连接已断开」）；`localStorage` 昵称写入加 try/catch；对局中切语言同步刷新 `#hint` 与大厅语言按钮（`refreshLangUi`）
+- **P3**：`style.css` 合并重复的 `#hud`/`#fps` 定义（保留 inset:0 版本并补 line-height/text-shadow）；`net.ts` 删除从未使用的 `onSnapshot` 回调；`net-smoke.ts` 去掉恒真三元
+- **FR-L3 补齐**：地图下拉新增「随机」项（`map.random` 中英文案；随机 = mapId 缺省，服务端任意分配）
+- **新增单测**：`scripts/unit-check.ts`（零依赖，`corepack pnpm unit`，根脚本 `unit`）——64 项断言覆盖 rayVsAABB/raycastWalls/resolveCircleWalls/damageAtRange/WeaponInventory/tierForKills/resolveShot/pickSpawnFarthest
+- **文档对齐**：requirements 头部补 2026-10-21 修订说明 + FR-U3/FR-S1/FR-C4 标注实现现状；techContext 修正 websocket-only 表述；systemPatterns 快照频率改 20~30Hz
+- 验证：`unit` 64 项全过 / `typecheck` 全过 / `check:i18n` OK（65 键、42 静态引用）/ `smoke:net` ×2 ALL PASS / `smoke:server` 通过；**待浏览器实测**：进局→返回大厅→再进局渲染、面板点击不开枪、对局中切语言
+
+## 最近变更（2026-10-18 · 开源化收尾）
+- **MIT 协议落地**：根 `LICENSE`（Copyright (c) 2026 qonies）+ 根 package.json `license: MIT`（子包 private 无需）+ README 新增「开源协议」章节与 License 徽章
+- **README 开源化完善**：头部扩充一句话简介 + 特性亮点 7 条（多人同步/武器解锁/Bot/双地图/i18n/局域网联机）+ 末尾新增「技术栈」表格
+- **GitHub 简介**：`gh repo edit` 设置 description（含技术要点）+ 7 个 topics（game/multiplayer/threejs/socketio/typescript/websocket/shooter），已验证生效
+- 提交：`269c9d9 docs: 添加 MIT 开源协议…` 已推送 origin/main
 
 ## 最近变更（2026-10-18 · M4 打磨完善）
 - **FR-N4 延迟补偿回溯（M4 旗舰项）**：`room.ts` SimFighter 新增 `hist`（每 tick 位置记录，容量 ≈LAG_COMP_HISTORY=1s）与 `pingMs`（输入消费时钳制更新 ≤500）；`processFire` 命中判定按「插值延迟 100ms + 半程 RTT」回溯（上限 LAG_COMP_MAX_REWIND=400ms；Bot 索敌用现位置故回溯为 0），hit 事件坐标 = 回溯位置（与射击者所见一致）；`net.ts` 建连后 ping/pong 每 2s 测 RTT（EWMA 0.7/0.3 平滑）随输入上报；协议仅增量可选字段（`InputMsg.pingMs` + PingMsg/PongMsg），PROTOCOL_VERSION 保持 2，新旧前后端互相兼容
@@ -83,13 +103,11 @@
 ## 最近变更（2026-10-18 · M1）
 - M1 单机战斗核心完成：shared 武器数值表、客户端战斗层（fighter/weapons/combat/bot/world/hud）、HP/死亡/重生、完整 HUD、基础 Bot；FR-W4 M1 约定（携带全部 6 类）已升 v0.2.3
 
-## 下一步：M3 系统完整（~2 周）
-1. 武器解锁成长（FR-W1：按类击杀数升级链 + localStorage 持久化 + 全屏解锁提示）
-2. 第二张地图（FR-MP2：狭巷近战型）+ 大厅地图选择接入
-3. Bot AI 完善（FR-B2~B5：巡逻/追击/躲避状态机 + 网格寻路 + 三档难度）
-4. 计分板（Tab）/结算面板/再来一局（FR-U1/M4）
-5. 音效（射击/命中/击杀/换弹；首次交互后初始化 AudioContext）
-6. 断线重连（FR-N5，30s 内回原状态）；延迟补偿回溯（若 M2 末未做）
+## 下一步
+1. 局域网多设备实测验收（M4 验收项）：60 FPS、双机开黑、平衡性反馈与数值调参
+2. 浏览器专项回归（本次体检修复的验证项）：进局→返回大厅→再进局渲染（forceContextLoss 移除后）、设置/结算面板点击不开枪、对局中切语言、地图「随机」项
+3. 待确认增强（未做）：Bot 切枪与全自动武器开火支持（当前 Bot 恒用手枪；若做需同时改 `bot.ts` 的 `f.input.firing`）
+4. V2（TDM/Hardpoint、账号与战绩、反作弊加固、更多地图武器，见需求 §1.2）
 
 ## 重要决策记录
 - 2026-10-17：渲染路线用户拍板选 Three.js（非 Canvas 2D）。

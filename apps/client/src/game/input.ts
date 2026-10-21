@@ -52,7 +52,13 @@ export class Input {
     this.mouseNdcY = 1 - ((e.clientY - rect.top) / rect.height) * 2;
   };
 
+  /** UI 面板（设置/结算）上的点击与滚轮不应触发开火/切枪（面板是 pointer-events:auto 的 DOM 覆盖层） */
+  private static isUiTarget(e: Event): boolean {
+    return e.target instanceof Element && e.target.closest('#settings, #settlement') !== null;
+  }
+
   private readonly onMouseDown = (e: MouseEvent): void => {
+    if (Input.isUiTarget(e)) return;
     if (e.button === 0) {
       this.firing = true;
       this.firePressedEdge = true;
@@ -64,6 +70,7 @@ export class Input {
   };
 
   private readonly onWheel = (e: WheelEvent): void => {
+    if (Input.isUiTarget(e)) return;
     this.wheelSteps += e.deltaY > 0 ? 1 : -1;
   };
 

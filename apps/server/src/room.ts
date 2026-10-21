@@ -50,6 +50,11 @@ const MAX_QUEUED_INPUTS = 8;
 const MAX_PRESS_PER_MSG = 3;
 /** 半自动/泵动累计待发射按下沿上限（防超射速积压连发，NFR-5） */
 const MAX_PENDING_PRESSES = 3;
+/** 输入超时（秒，NFR-5）：超过该时长未收到玩家输入则清空最后意图——
+ *  防止客户端切后台/网络卡顿/恶意停发时，「最后一条 firing=true/moveX=1」被无限沿用 */
+const INPUT_TIMEOUT = 0.25;
+/** 客户端上报武器进度的单类击杀上限（FR-A1 信任基线的加固，防伪造直接满级） */
+const MAX_REPORTED_CLASS_KILLS = 999;
 /** 单次 interval 唤醒最多推进的模拟步数（超过则丢弃积压，防追步风暴） */
 const MAX_STEPS_PER_FRAME = 8;
 
@@ -87,6 +92,8 @@ export interface SimFighter {
   nextFireAt: number;
   /** 客户端最近 RTT（ms，延迟补偿回溯 FR-N4 用；Bot 恒 0） */
   pingMs: number;
+  /** 最近一次收到该玩家输入的模拟时间（输入超时保护 INPUT_TIMEOUT 用） */
+  lastInputAt: number;
   /** 位置历史（延迟补偿回溯，M4）：每 tick 记录，容量 ≈ LAG_COMP_HISTORY 秒 */
   hist: Array<{ t: number; x: number; y: number }>;
 }
@@ -226,10 +233,13 @@ export class Room {
     return true;
   }
 
-  /** 应用进房武器进度基线（FR-A1：客户端 localStorage 上报；仅信任数值，越权在内部测试可接受） */
+  /** 应用进房武器进度基线（FR-A1：客户端 localStorage 上报；单类击杀钳制上限，防伪造直接满级） */
   private applyProgress(f: SimFighter, progress?: Partial<Record<WeaponId, number>>): void {
     for (const id of WEAPON_ORDER) {
-      const kills = Math.max(0, Math.floor(Number(progress?.[id] ?? 0)) || 0);
+      const kills = Math.min(
+        MAX_REPORTED_CLASS_KILLS,
+        Math.max(0, Math.floor(Number(progress?.[id] ?? 0)) || 0),
+      );
       f.classKills[id] = kills;
       const tier = tierForKills(id, kills);
       f.tier[id] = tier;
@@ -306,6 +316,7 @@ export class Room {
         continue;
       }
       for (const msg of q) {
+        f.lastInputAt = now; // 心跳：任何输入都刷新（输入超时保护）
         f.input.moveX = clampUnit(msg.moveX);
         f.input.moveY = clampUnit(msg.moveY);
         // 瞄准回退仅对非有限值生效（0 是合法坐标，原 `Number()||` falsy 判断会误判）
@@ -333,6 +344,18 @@ export class Room {
       q.length = 0;
     }
 
+    // 1.5 输入超时保护（NFR-5）：玩家停发输入（切后台/卡顿/恶意只发一条 firing=true）时
+    // 清空最后意图，避免残影持续移动/开火（服务端不会自动 reload，所以开火可持续到弹尽再循环）
+    for (const f of this.fighters.values()) {
+      if (f.bot || f.disconnectAt !== null) continue;
+      if (now - f.lastInputAt > INPUT_TIMEOUT) {
+        f.input.moveX = 0;
+        f.input.moveY = 0;
+        f.input.firing = false;
+        f.firePresses = 0;
+      }
+    }
+
     // 2. 推进换弹完成（权威库存状态机；漏调会导致 reloadEnd 永不清除、弹尽后无法再开火）
     for (const f of this.fighters.values()) {
       f.inv.update(now);
@@ -340,7 +363,7 @@ export class Room {
 
     // 3. 重生（距敌最远出生点，FR-MP3/C4；对局结束后冻结）
     for (const f of this.fighters.values()) {
-      if (!this.matchOver && !f.alive && f.respawnAt !== null && now >= f.respawnAt) this.respawn(f);
+      if (!this.matchOver && !f.alive && f.respawnAt !== null && now >= f.respawnAt) this.respawn(f, now);
     }
 
     // 4. Bot AI（合成输入，走与玩家同一管线；断线宽限期内挂机）
@@ -523,7 +546,7 @@ export class Room {
     }
   }
 
-  private respawn(f: SimFighter): void {
+  private respawn(f: SimFighter, now: number): void {
     const enemies = [...this.fighters.values()].filter((o) => o !== f && o.alive);
     const s = pickSpawnFarthest(this.map, enemies);
     f.x = s.x;
@@ -534,6 +557,10 @@ export class Room {
     f.bloom = 0;
     f.firePresses = 0;
     f.inv.resetAll();
+    // 清空位置历史并写入出生点：否则延迟补偿回溯（posAt 取 t <= rewindT 的最近历史）
+    // 会在复活后最长 ~400ms 内命中「死亡前的旧坐标」，表现为新出生点打不中/旧位置隔空命中
+    f.hist.length = 0;
+    f.hist.push({ t: now, x: f.x, y: f.y });
   }
 
   private createFighter(id: string, name: string, bot: boolean): SimFighter {
@@ -570,6 +597,7 @@ export class Room {
       wanderSince: 0,
       nextFireAt: 0,
       pingMs: 0,
+      lastInputAt: 0,
       hist: [],
     };
   }
@@ -580,9 +608,10 @@ export class Room {
     this.fighters.set(id, this.createFighter(id, `BOT-${this.botSeq}`, true));
   }
 
-  /** Bot 填充（FR-B1）：保持 bots = min(BOT_FILL_MAX, 房容量 - 玩家数) */
+  /** Bot 填充（FR-B1）：保持 bots = min(BOT_FILL_MAX, 房容量 - 玩家数)；房间无人时清空 Bot（省 CPU，空房回收前空转） */
   private adjustBots(): void {
-    const want = Math.min(BOT_FILL_MAX, ROOM_CAPACITY - this.playerCount);
+    const want =
+      this.playerCount === 0 ? 0 : Math.min(BOT_FILL_MAX, ROOM_CAPACITY - this.playerCount);
     const bots = [...this.fighters.values()].filter((f) => f.bot);
     let have = bots.length;
     for (let i = bots.length - 1; i >= 0 && have > want; i--) {

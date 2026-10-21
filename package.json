@@ -14,6 +14,7 @@
     "typecheck": "corepack pnpm -r typecheck",
     "smoke:server": "corepack pnpm -F @DoShoot/server smoke",
     "smoke:net": "corepack pnpm -F @DoShoot/server exec tsx ../../scripts/net-smoke.ts",
+    "unit": "corepack pnpm -F @DoShoot/server exec tsx ../../scripts/unit-check.ts",
     "check:i18n": "corepack pnpm -F @DoShoot/server exec tsx ../../scripts/i18n-check.ts",
     "loadtest": "corepack pnpm -F @DoShoot/server exec tsx ../../scripts/load-test.ts"
   },

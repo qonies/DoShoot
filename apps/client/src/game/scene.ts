@@ -174,8 +174,9 @@ export class GameScene {
       }
     });
     this.renderer.dispose();
-    // 释放 WebGL 上下文：下一次对局在同一 canvas 上重建 renderer，需要干净上下文
-    this.renderer.forceContextLoss();
+    // 注意：这里不调用 forceContextLoss()——同一 canvas 上重建 renderer 时 getContext
+    // 返回的仍是已丢失的上下文（除非显式 restoreContext），会导致第二次进局黑屏。
+    // renderer.dispose() 已释放 GPU 资源，上下文可跨对局安全复用。
   }
 
   render(): void {

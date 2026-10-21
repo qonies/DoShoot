@@ -67,6 +67,7 @@ corepack pnpm dev:server  # 服务端同源托管构建产物
 
 ```bash
 corepack pnpm typecheck    # 全量 TS 检查
+corepack pnpm unit         # shared 纯函数单测（碰撞/开火解算/数值衰减/库存状态机/解锁链）
 corepack pnpm check:i18n   # i18n 中英键集 + 代码引用键校对（NFR-9）
 corepack pnpm loadtest     # 内部压测：50 客户端 × 30s 打真实服务端（NFR-3 ≥50 同时在线）
                            # 可调参：corepack pnpm loadtest -- --clients=80 --seconds=60

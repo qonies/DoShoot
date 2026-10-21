@@ -85,7 +85,7 @@ function makeClient(nickname: string, mapId?: string): Promise<ClientState> {
       clearTimeout(to);
       // 持续发送移动 + 瞄准输入（30Hz）；朝地图中心按主导轴移动——
       // 任意出生点到中心沿主导轴均有 ≥2.1 单位的无遮挡路径，避免贴边出生点导致位移断言抖动
-      const cx = w.entities.length > 0 ? 20 : 20;
+      const cx = 20; // 地图中心（range 40×40；移动断言仅在 range 房间执行）
       state.inputTimer = setInterval(() => {
         const me = state.snapshots.at(-1)?.entities.find((e) => e.id === w.playerId);
         const x = me?.x ?? w.entities[0]?.x ?? 20;
