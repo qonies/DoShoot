@@ -1,4 +1,4 @@
-/** 小地图（FR-U2，M4）：左上角 canvas——墙体轮廓预渲染 + 自己位置/朝向；V1 不显示敌人（对标原作） */
+/** 小地图（FR-U2，M4）：左上角 canvas——墙体轮廓预渲染 + 自己位置/朝向；V1 不显示敌人（同类产品惯例） */
 
 import { isWall, type GameMap } from '@DoShoot/shared';
 

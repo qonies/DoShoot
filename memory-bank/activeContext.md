@@ -25,7 +25,7 @@
 
 ## 最近变更（2026-10-18 · M4 打磨完善）
 - **FR-N4 延迟补偿回溯（M4 旗舰项）**：`room.ts` SimFighter 新增 `hist`（每 tick 位置记录，容量 ≈LAG_COMP_HISTORY=1s）与 `pingMs`（输入消费时钳制更新 ≤500）；`processFire` 命中判定按「插值延迟 100ms + 半程 RTT」回溯（上限 LAG_COMP_MAX_REWIND=400ms；Bot 索敌用现位置故回溯为 0），hit 事件坐标 = 回溯位置（与射击者所见一致）；`net.ts` 建连后 ping/pong 每 2s 测 RTT（EWMA 0.7/0.3 平滑）随输入上报；协议仅增量可选字段（`InputMsg.pingMs` + PingMsg/PongMsg），PROTOCOL_VERSION 保持 2，新旧前后端互相兼容
-- **FR-U2 小地图**：新增 `game/minimap.ts`（150×150 canvas，墙体预渲染底图每局一张，每帧只画自己三角朝向；世界观 y 向下与 canvas 一致）；`index.html` #minimap + style.css；不显示敌人（对标原作）
+- **FR-U2 小地图**：新增 `game/minimap.ts`（150×150 canvas，墙体预渲染底图每局一张，每帧只画自己三角朝向；世界观 y 向下与 canvas 一致）；`index.html` #minimap + style.css；不显示敌人（同类产品惯例）
 - **FR-L5 设置界面**：新增 `settings.ts`（音量/BGM/画质/语言，localStorage `DoShoot.settings`）+ Esc 开关面板（#settings，pointer-events 局部恢复交互）；画质三档 `scene.setQuality`（高=原生 DPR≤2+阴影 / 中=DPR1+阴影 / 低=DPR1 无阴影，切换时材质 needsUpdate 重编译）；鼠标灵敏度项因 V1 绝对指针瞄准不适用（需求 v0.3.1 说明）；backToLobby 时关面板防残留
 - **FR-S2/S3 音频增强**：`audio.ts` `shoot` 增加方位声像 pan（StereoPanner，不支持时静默降级；`world.ts` 按 (sx-lx)/dist 计算，正交俯视相机下屏幕右≈世界 +x）；新增合成 BGM（A 小调 pad 4 音轻微失谐 + 低通 0.05Hz 慢扫，独立 bgmGain 通道，ensure() 首次交互启动，音量 0..1×0.25 刻度）
 - **内部压测（NFR-3）**：新增 `scripts/load-test.ts`（子进程起真实服务端 [node+tsx 直接跑绕过 pnpm 生命周期，不触发 smoke 自检] + N 模拟客户端 30Hz 随机输入/20% 开火，统计进房/快照率/带宽/断线，win32 用 taskkill /T /F 收尾）；实测 **PASS**——50/50 进房、快照 avg/min 均 26.8/s、单快照 ~2.2KB、单客户端下行 ~59KB/s（全服 ~2.9MB/s）、0 意外断线；决策 #8 据此维持 JSON 编码

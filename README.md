@@ -1,6 +1,6 @@
 # DoShoot Web
 
-浏览器多人在线俯视角射击游戏（对标 deadshot.io）。打开网页、输入昵称、10 秒内进入对局——免注册、免安装，现代桌面浏览器即玩。
+浏览器多人在线俯视角射击游戏。打开网页、输入昵称、10 秒内进入对局——免注册、免安装，现代桌面浏览器即玩。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 

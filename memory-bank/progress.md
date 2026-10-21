@@ -1,7 +1,7 @@
 # 进度（Progress）
 
 ## 已完成
-- [x] 对标 deadshot.io 玩法拆解
+- [x] 对标同类 .io 射击游戏的玩法拆解
 - [x] 关键技术路线确认（Three.js 伪 3D 俯视角）
 - [x] 需求文档 `docs/requirements.md`（v0.1 初稿）
 - [x] Memory Bank 初始化
