@@ -8,9 +8,13 @@ import { fileURLToPath } from 'node:url';
 import { Server } from 'socket.io';
 import {
   DEFAULT_MAP,
+  KILL_TARGET_OPTIONS,
   MAPS,
+  MATCH_KILL_TARGET,
+  MATCH_TIME_LIMIT,
   PROTOCOL_VERSION,
   ROOM_RECYCLE_MS,
+  TIME_LIMIT_OPTIONS,
   getMap,
   type BotDifficulty,
   type InputMsg,
@@ -19,6 +23,19 @@ import {
 import { Room } from './room';
 
 const PORT = Number(process.env.PORT ?? 3000);
+
+/** 对局生命周期校验（FR-L7/NFR-5）：仅接受白名单值，非法回退默认 */
+function sanitizeRule(raw: JoinMsg): { killTarget: number; timeLimitSec: number } {
+  const killTarget =
+    typeof raw.killTarget === 'number' && KILL_TARGET_OPTIONS.includes(raw.killTarget)
+      ? raw.killTarget
+      : MATCH_KILL_TARGET;
+  const timeLimitSec =
+    typeof raw.timeLimitSec === 'number' && TIME_LIMIT_OPTIONS.includes(raw.timeLimitSec)
+      ? raw.timeLimitSec
+      : MATCH_TIME_LIMIT;
+  return { killTarget, timeLimitSec };
+}
 
 /** 客户端构建产物目录（存在则同源托管，局域网设备直接访问 http://<IP>:3000 即可加入） */
 const DIST_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../client/dist');
@@ -68,21 +85,35 @@ class RoomManager {
 
   constructor(private readonly io: Server) {}
 
-  /** 选房：mapId 有效则在该地图的房间中选人最多者（无则新建）；否则快速加入全局人最多的非满房间 */
-  pick(mapId: string | undefined, difficulty: BotDifficulty): Room {
+  /** 选房（FR-L3/L4/L7/N6）：优先「地图 + 对局生命周期规则」都相同且未满的房间；无则新建。
+   *  mapId 无效（快速加入）时全局选人最多者，但优先与请求规则相同的房间（避免偏好被稀释）；
+   *  规则不一致的房间不混入——对局生命周期是建房时确定的房间属性 */
+  pick(
+    mapId: string | undefined,
+    difficulty: BotDifficulty,
+    rule: { killTarget: number; timeLimitSec: number },
+  ): Room {
+    const sameRule = (r: Room): boolean =>
+      r.killTarget === rule.killTarget && r.timeLimitSec === rule.timeLimitSec;
     const map = getMap(mapId);
     if (map) {
-      const candidates = this.rooms.filter((r) => r.mapId === map.id && r.hasCapacity);
+      const candidates = this.rooms.filter(
+        (r) => r.mapId === map.id && sameRule(r) && r.hasCapacity,
+      );
       if (candidates.length > 0) {
         return candidates.reduce((a, b) => (b.playerCount > a.playerCount ? b : a));
       }
-      return this.create(map.id, difficulty);
+      return this.create(map.id, difficulty, rule);
     }
-    // 快速加入（FR-L4）：人最多的非满房间；无可用房间则随机地图新建
+    // 快速加入（FR-L4/L7）：优先同规则中人最多的非满房间，其次任意非满房间；均无则随机地图新建
+    const openSameRule = this.rooms.filter((r) => sameRule(r) && r.hasCapacity);
+    if (openSameRule.length > 0) {
+      return openSameRule.reduce((a, b) => (b.playerCount > a.playerCount ? b : a));
+    }
     const open = this.rooms.filter((r) => r.hasCapacity);
     if (open.length > 0) return open.reduce((a, b) => (b.playerCount > a.playerCount ? b : a));
     const ids = Object.keys(MAPS);
-    return this.create(ids[Math.floor(Math.random() * ids.length)]!, difficulty);
+    return this.create(ids[Math.floor(Math.random() * ids.length)]!, difficulty, rule);
   }
 
   /** 断线重连（FR-N5）：在任意房间中查找宽限期内的断线实体 */
@@ -111,10 +142,24 @@ class RoomManager {
     this.rooms.length = 0;
   }
 
-  private create(mapId: string, difficulty: BotDifficulty): Room {
-    const room = new Room(this.io, getMap(mapId) ?? DEFAULT_MAP, `ffa-${++this.seq}`, difficulty);
+  private create(
+    mapId: string,
+    difficulty: BotDifficulty,
+    rule: { killTarget: number; timeLimitSec: number },
+  ): Room {
+    const room = new Room(
+      this.io,
+      getMap(mapId) ?? DEFAULT_MAP,
+      `ffa-${++this.seq}`,
+      difficulty,
+      rule.killTarget,
+      rule.timeLimitSec,
+    );
     this.rooms.push(room);
-    console.log(`[server] room created: ${room.id} (map=${room.mapId}, bots=${difficulty})`);
+    console.log(
+      `[server] room created: ${room.id} (map=${room.mapId}, bots=${difficulty}, ` +
+        `rule=${room.killTarget}kills/${room.timeLimitSec}s)`,
+    );
     return room;
   }
 }
@@ -156,7 +201,7 @@ io.on('connection', (socket) => {
     const mapId = typeof raw.mapId === 'string' && getMap(raw.mapId) ? raw.mapId : undefined;
     const difficulty: BotDifficulty =
       raw.difficulty === 'easy' || raw.difficulty === 'hard' ? raw.difficulty : 'normal';
-    const room = rooms.pick(mapId, difficulty);
+    const room = rooms.pick(mapId, difficulty, sanitizeRule(raw));
     // 防御性检查：pick() 的契约为「只返回有容量的房间或新建房间」，full 当前不可达；
     // 保留该分支以约束契约回归（协议 JoinRejectReason='full' 已与客户端约定）
     if (!room.hasCapacity) {

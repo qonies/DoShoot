@@ -1,6 +1,7 @@
 /** 基础 HUD（FR-U1/C3/C4）：血条、弹药/换弹、击杀流、动态准星、命中标记、伤害飘字、受击泛红、重生界面 */
 
 import { t } from '../i18n';
+import { MATCH_KILL_TARGET } from '@DoShoot/shared';
 import type { EntitySnapshot, StandingRow, WeaponId } from '@DoShoot/shared';
 import type { GameScene } from './scene';
 
@@ -178,10 +179,17 @@ export class Hud {
     }, UNLOCK_BANNER_TTL_MS);
   }
 
-  /** 结算面板（FR-M4）：原因 + 排名（K/D） */
-  showSettlement(reason: 'kills' | 'time', standings: readonly StandingRow[], localId: string): void {
+  /** 结算面板（FR-M4/L7）：原因 + 排名（K/D）；killTarget 供「达到 X 杀」文案参数化 */
+  showSettlement(
+    reason: 'kills' | 'time',
+    standings: readonly StandingRow[],
+    localId: string,
+    killTarget = MATCH_KILL_TARGET,
+  ): void {
     this.settleReason.textContent =
-      reason === 'time' ? t('settle.timeUp') : t('settle.reachTarget').replace('{name}', standings[0]?.name ?? '?');
+      reason === 'time'
+        ? t('settle.timeUp')
+        : t('settle.reachTarget').replace('{name}', standings[0]?.name ?? '?').replace('{n}', `${killTarget}`);
     this.fillStandings(this.settleBody, standings, localId);
     this.settlement.classList.remove('hidden');
   }

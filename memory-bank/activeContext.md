@@ -1,7 +1,15 @@
 # 活动上下文（Active Context）
 
 ## 当前焦点
-**FR-E1 冲锋枪彩蛋模式已落地（2026-10-23，协议仍 v2 增量兼容）** — 待用户局域网实测验收；此前 M4 体检修复的浏览器专项回归仍待验证（进局→返回大厅→再进局渲染等）。
+**FR-L7 对局生命周期选择已落地（2026-10-23，协议仍 v2 增量兼容）+ FR-E1 冲锋枪彩蛋模式** — 待用户局域网实测验收；此前 M4 体检修复的浏览器专项回归仍待验证（进局→返回大厅→再进局渲染等）。
+
+## 最近变更（2026-10-23 · FR-L7 对局生命周期选择）
+- **玩法**：大厅新增「击杀目标」（30/50/100 杀）+「对局时限」（5/8/10 分钟）两个下拉框（`#killTarget`/`#timeLimit`），先到即结束（FR-M1 语义不变），默认 30 杀 / 5 分钟 = 原行为
+- **shared**：`KILL_TARGET_OPTIONS`/`TIME_LIMIT_OPTIONS` 白名单常量；`JoinMsg` 增量可选字段 `killTarget?`/`timeLimitSec?`；`matchEnd` 事件携带 `killTarget?`
+- **服务端**：`index.ts sanitizeRule` 白名单校验（非法回退默认 30/300）；`Room` 构造器新增 `killTarget`/`timeLimitSec` 参数，结束判定/快照倒计时/事件全部消费实例值；`RoomManager.pick` 按「地图 + 规则」选房（快速加入优先同规则房间，不混房）
+- **客户端**：`hud.showSettlement` 新增 killTarget 参数，`settle.reachTarget` 文案参数化「{name} 达到 {n} 杀！」；i18n 新增 8 键（67→75）
+- **测试**：`smoke:net` 新增步骤 7（自定义规则 50 杀/600s 独立建房，断言 matchTimeLeft≈600s，与默认 300s 房间不混房）
+- 验证：`unit` 86 全过 / `typecheck` 全过 / `check:i18n` OK（75 键）/ `smoke:net` ALL PASS / `build` 成功（gzip 150KB）
 
 ## 最近变更（2026-10-23 · FR-E1 冲锋枪彩蛋模式）
 - **玩法**：对局中依次输入 4 位口令 **`7890`** + Enter → 切换「狂暴冲锋枪」（1200rpm / 满伤 40·最大射程 60 / 无限弹药不消耗不换弹）；当局跨重生保留，**回合结束（matchEnd）自动撤销，不带到下一局**；断线重连回原状态保留

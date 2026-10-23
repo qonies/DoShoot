@@ -33,9 +33,12 @@ export const BOT_FILL_MAX = 5;
 /** Bot AI 三档难度（FR-B3，大厅可选，默认中等） */
 export type BotDifficulty = 'easy' | 'normal' | 'hard';
 
-/** 对局结束条件（FR-M1）：先到 30 杀或 5 分钟时限 */
+/** 对局结束条件默认值（FR-M1）：先到 30 杀或 5 分钟时限 */
 export const MATCH_KILL_TARGET = 30;
 export const MATCH_TIME_LIMIT = 300;
+/** 对局生命周期可选项（FR-L7）：大厅可选击杀目标与时限，先到即结束；默认值即上面两项 */
+export const KILL_TARGET_OPTIONS: readonly number[] = [30, 50, 100];
+export const TIME_LIMIT_OPTIONS: readonly number[] = [300, 480, 600];
 /** 断线重连宽限（秒，FR-N5）：超时视为离开并移除 */
 export const RECONNECT_GRACE = 30;
 /** 空房间回收（毫秒，FR-N6） */

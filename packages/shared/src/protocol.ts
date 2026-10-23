@@ -22,6 +22,10 @@ export interface JoinMsg {
   rejoinId?: string | null;
   /** 武器解锁进度上报（FR-A1：localStorage 基线，键 = 武器类 id，值 = 该类累计击杀数） */
   progress?: Partial<Record<WeaponId, number>>;
+  /** 对局生命周期（FR-L7）：击杀目标（KILL_TARGET_OPTIONS 之一；缺省/非法 = MATCH_KILL_TARGET） */
+  killTarget?: number;
+  /** 对局时限秒（TIME_LIMIT_OPTIONS 之一；缺省/非法 = MATCH_TIME_LIMIT）。先到击杀目标或时限即结束 */
+  timeLimitSec?: number;
 }
 
 /** 进房被拒原因 */
@@ -100,8 +104,8 @@ export type GameEvent =
   | { type: 'kill'; killerId: string; killerName: string; victimId: string; victimName: string; weaponId: WeaponId }
   /** 武器层级解锁（FR-W1：解锁即时生效；客户端对本人的事件做全屏提示） */
   | { type: 'unlock'; id: string; classId: WeaponId; tier: number; nameKey: string }
-  /** 对局结束（FR-M1/M4：先到 MATCH_KILL_TARGET 杀或时限；客户端弹出结算面板） */
-  | { type: 'matchEnd'; reason: 'kills' | 'time'; standings: StandingRow[] }
+  /** 对局结束（FR-M1/M4：先到 MATCH_KILL_TARGET 杀或时限；客户端弹出结算面板；killTarget 供结算文案） */
+  | { type: 'matchEnd'; reason: 'kills' | 'time'; standings: StandingRow[]; killTarget?: number }
   /** 再来一局（FR-M4：房间整体重开，kills/deaths 清零、全员重生） */
   | { type: 'matchReset' };
 

@@ -71,6 +71,9 @@ mapSelect.replaceChildren(
   randomOpt,
 );
 const difficultySelect = document.querySelector<HTMLSelectElement>('#difficulty')!;
+// 对局生命周期（FR-L7）：击杀目标 + 时限下拉（先到即结束，默认 30 杀 / 5 分钟）
+const killTargetSelect = document.querySelector<HTMLSelectElement>('#killTarget')!;
+const timeLimitSelect = document.querySelector<HTMLSelectElement>('#timeLimit')!;
 
 // 武器解锁进度（FR-A1：localStorage 本地持久层，跨局保留成长）
 function loadProgress(): Partial<Record<WeaponId, number>> {
@@ -169,6 +172,8 @@ function startGame(kind: 'quick' | 'map'): void {
     nickname,
     mapId: kind === 'quick' || mapSelect.value === 'random' ? undefined : mapSelect.value || 'range',
     difficulty: difficultySelect.value as 'easy' | 'normal' | 'hard',
+    killTarget: Number(killTargetSelect.value),
+    timeLimitSec: Number(timeLimitSelect.value),
     rejoinId: sessionStorage.getItem(PLAYER_ID_KEY),
     progress: loadProgress(),
   });
@@ -214,8 +219,8 @@ function runGameLoop(net: Net, welcome: WelcomeMsg): () => void {
       p[classId] = (p[classId] ?? 0) + 1;
       saveProgress(p);
     },
-    // FR-M4：结算面板 + 再来一局/返回大厅
-    onMatchEnd: (reason, standings) => hud.showSettlement(reason, standings, world.selfId),
+    // FR-M4/L7：结算面板 + 再来一局/返回大厅（killTarget 供「达到 X 杀」文案）
+    onMatchEnd: (reason, standings, kt) => hud.showSettlement(reason, standings, world.selfId, kt),
     onMatchReset: () => hud.hideSettlement(),
     // FR-E1：冲锋枪彩蛋模式激活 → 全屏提示（服务端口令验证通过后的快照回调）
     onRushActivated: () => {

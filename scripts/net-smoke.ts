@@ -21,22 +21,23 @@ import { Room } from '../apps/server/src/room';
 let PORT = 0;
 const httpServer = createServer(() => {});
 const io = new Server(httpServer, { cors: { origin: true } });
-/** 房间按地图惰性创建（与 index.ts RoomManager 同语义的最小子集，FR-MP2/L3） */
+/** 房间按「地图 + 对局生命周期规则」惰性创建（与 index.ts RoomManager 同语义的最小子集，FR-MP2/L3/L7） */
 const rooms = new Map<string, Room>();
 const sessions = new Map<string, Room>();
-function roomFor(mapId: string | undefined): Room {
+function roomFor(mapId: string | undefined, killTarget: number, timeLimitSec: number): Room {
   const id = mapId && MAPS[mapId] ? mapId : 'range';
-  let r = rooms.get(id);
+  const key = `${id}:${killTarget}:${timeLimitSec}`;
+  let r = rooms.get(key);
   if (!r) {
-    r = new Room(io, MAPS[id]!, `smoke-${id}`);
-    rooms.set(id, r);
+    r = new Room(io, MAPS[id]!, `smoke-${key}`, 'normal', killTarget, timeLimitSec);
+    rooms.set(key, r);
   }
   return r;
 }
 
 io.on('connection', (socket) => {
   let joined = false;
-  socket.on('join', (raw: { version: number; nickname: string; mapId?: string; rejoinId?: string }) => {
+  socket.on('join', (raw: { version: number; nickname: string; mapId?: string; rejoinId?: string; killTarget?: number; timeLimitSec?: number }) => {
     if (!raw || raw.version !== PROTOCOL_VERSION) {
       socket.emit('joinRejected', { reason: 'version' });
       return;
@@ -53,7 +54,12 @@ io.on('connection', (socket) => {
         }
       }
     }
-    const room = roomFor(raw.mapId);
+    // 对局生命周期（FR-L7，与 index.ts sanitizeRule 同语义的白名单子集）
+    const rule = {
+      killTarget: raw.killTarget === 50 || raw.killTarget === 100 ? raw.killTarget : 30,
+      timeLimitSec: raw.timeLimitSec === 480 || raw.timeLimitSec === 600 ? raw.timeLimitSec : 300,
+    };
+    const room = roomFor(raw.mapId, rule.killTarget, rule.timeLimitSec);
     room.addPlayer(socket.id, raw.nickname || 'P');
     joined = true;
     sessions.set(socket.id, room);
@@ -83,7 +89,12 @@ interface ClientState {
   seq: number;
 }
 
-function makeClient(nickname: string, mapId?: string): Promise<ClientState> {
+function makeClient(
+  nickname: string,
+  mapId?: string,
+  killTarget?: number,
+  timeLimitSec?: number,
+): Promise<ClientState> {
   const state: ClientState = { socket: Client(`http://localhost:${PORT}`, { transports: ['websocket'] }), welcome: null, snapshots: [], inputTimer: null, seq: 0 };
   return new Promise((resolve, reject) => {
     const to = setTimeout(() => reject(new Error(`${nickname}: welcome timeout`)), 3000);
@@ -112,7 +123,12 @@ function makeClient(nickname: string, mapId?: string): Promise<ClientState> {
     });
     state.socket.on('snapshot', (s: SnapshotMsg) => state.snapshots.push(s));
     state.socket.connect();
-    state.socket.emit('join', mapId ? { version: PROTOCOL_VERSION, nickname, mapId } : { version: PROTOCOL_VERSION, nickname });
+    const joinMsg: Record<string, unknown> = mapId
+      ? { version: PROTOCOL_VERSION, nickname, mapId }
+      : { version: PROTOCOL_VERSION, nickname };
+    if (killTarget !== undefined) joinMsg.killTarget = killTarget;
+    if (timeLimitSec !== undefined) joinMsg.timeLimitSec = timeLimitSec;
+    state.socket.emit('join', joinMsg);
   });
 }
 
@@ -315,6 +331,17 @@ async function run(): Promise<void> {
     if (c3snap.entities.some((e) => e.deaths === undefined)) fail('EntitySnapshot.deaths missing (FR-M4)');
     console.log(`[smoke:net] second map room OK (mapId=${c3.welcome!.mapId}, matchTimeLeft=${Math.round(c3snap.matchTimeLeft!)}s)`);
     c3.socket.close();
+
+    // 7) 对局生命周期（FR-L7）：自定义规则（50 杀 / 10 分钟）独立建房，倒计时按 600s 基准；
+    //    默认规则房间（上方 c3）仍为 300s，两种规则互不混房
+    const c4 = await makeClient('Tester-4', 'range', 50, 600);
+    await sleep(300);
+    const c4snap = c4.snapshots.at(-1);
+    if (!c4snap || c4snap.matchTimeLeft == null || c4snap.matchTimeLeft < 580) {
+      fail(`custom rule room should use 600s time limit, got matchTimeLeft=${c4snap?.matchTimeLeft}`);
+    }
+    console.log(`[smoke:net] custom match rule OK (50 kills / 600s, matchTimeLeft=${Math.round(c4snap.matchTimeLeft!)}s)`);
+    c4.socket.close();
 
     c2.socket.close();
     if (c1.inputTimer) clearInterval(c1.inputTimer);

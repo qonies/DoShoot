@@ -2,6 +2,7 @@
 
 import {
   BOT_FILL_MAX,
+  CHEAT_RUSH_CODE,
   HITBOX_HALF,
   INTERP_DELAY,
   LAG_COMP_HISTORY,
@@ -18,7 +19,6 @@ import {
   SIM_TICK_RATE,
   SNAPSHOT_RATE_MAX,
   WEAPON_ORDER,
-  CHEAT_RUSH_CODE,
   WeaponInventory,
   damageAtRange,
   pickSpawnFarthest,
@@ -131,6 +131,9 @@ export class Room {
     private readonly map: GameMap,
     roomId: string,
     private readonly difficulty: BotDifficulty = 'normal',
+    /** 对局生命周期（FR-L7）：建房者的大厅选择；先到击杀目标或时限即结束（FR-M1） */
+    readonly killTarget: number = MATCH_KILL_TARGET,
+    readonly timeLimitSec: number = MATCH_TIME_LIMIT,
   ) {
     this.id = roomId;
     this.mapId = map.id;
@@ -420,10 +423,10 @@ export class Room {
       if (f.hist.length > histMax) f.hist.shift();
     }
 
-    // 6. 对局结束判定（FR-M1：先到 MATCH_KILL_TARGET 杀或时限）
+    // 6. 对局结束判定（FR-M1/L7：先到 killTarget 杀或时限，均可配置）
     if (!this.matchOver) {
-      const timeUp = now - this.matchStart >= MATCH_TIME_LIMIT;
-      const killTarget = [...this.fighters.values()].some((f) => f.kills >= MATCH_KILL_TARGET);
+      const timeUp = now - this.matchStart >= this.timeLimitSec;
+      const killTarget = [...this.fighters.values()].some((f) => f.kills >= this.killTarget);
       if (timeUp || killTarget) this.endMatch(killTarget ? 'kills' : 'time', events);
     }
   }
@@ -435,7 +438,7 @@ export class Room {
     const standings: StandingRow[] = [...this.fighters.values()]
       .map((f) => ({ id: f.id, name: f.name, bot: f.bot, kills: f.kills, deaths: f.deaths }))
       .sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
-    events.push({ type: 'matchEnd', reason, standings });
+    events.push({ type: 'matchEnd', reason, standings, killTarget: this.killTarget });
   }
 
   /** 快照广播：全量快照 + 事件捎带（频率 = 唤醒频率，落在 SNAPSHOT_RATE_MIN~MAX） */
@@ -444,7 +447,7 @@ export class Room {
       version: PROTOCOL_VERSION,
       tick: this.tick,
       time: this.time,
-      matchTimeLeft: this.matchOver ? null : Math.max(0, MATCH_TIME_LIMIT - (this.time - this.matchStart)),
+      matchTimeLeft: this.matchOver ? null : Math.max(0, this.timeLimitSec - (this.time - this.matchStart)),
       entities: this.snapshotEntities(),
       events,
     };

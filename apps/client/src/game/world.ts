@@ -3,6 +3,7 @@
 
 import * as THREE from 'three';
 import {
+  MATCH_KILL_TARGET,
   PLAYER_RADIUS,
   PLAYER_SPEED,
   PROTOCOL_VERSION,
@@ -33,7 +34,7 @@ export interface WorldCallbacks {
   /** 本人击杀（FR-A1：客户端按类累计并持久化到 localStorage） */
   onOwnKill(classId: WeaponId): void;
   /** 对局结束（FR-M4 结算面板） */
-  onMatchEnd(reason: 'kills' | 'time', standings: StandingRow[]): void;
+  onMatchEnd(reason: 'kills' | 'time', standings: StandingRow[], killTarget?: number): void;
   /** 再来一局重置（FR-M4：关闭结算面板） */
   onMatchReset(): void;
   /** 冲锋枪彩蛋模式激活（FR-E1：服务端授予后经快照 rush 字段同步，客户端全屏提示） */
@@ -342,7 +343,7 @@ export class NetWorld {
       } else if (ev.type === 'matchEnd') {
         this.matchOver = true;
         sfx.matchEnd();
-        this.cb.onMatchEnd(ev.reason, ev.standings);
+        this.cb.onMatchEnd(ev.reason, ev.standings, ev.killTarget ?? MATCH_KILL_TARGET);
       } else if (ev.type === 'matchReset') {
         this.matchOver = false;
         this.pendingInputs = [];
