@@ -35,6 +35,8 @@
   "weapon.lmg": "LMG",
   "weapon.lmg.t2": "Heavy MG",
   "weapon.lmg.t3": "Rapid MG",
+  "weapon.rush": "Rage SMG",
+  "rush.on": "RUSH MODE! Extreme fire rate · Long range · Infinite ammo (this match only)",
   "hud.kills": "Kills",
   "hud.reloading": "Reloading…",
   "hud.eliminated": "ELIMINATED",

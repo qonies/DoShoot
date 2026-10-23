@@ -25,7 +25,7 @@ packages/shared/src/
 ├─ combat.ts     # resolveShot 纯函数开火解算（散布/多弹丸/射线判定；两端共用杜绝分叉）
 ├─ map.ts        # 地图数据 + MAPS 注册表（M3：range 靶场 + alley 狭巷）+ pickSpawnFarthest
 ├─ collision.ts  # 圆-网格碰撞解算 / DDA 射线 / rayVsAABB（含零分量加固）
-└─ protocol.ts   # join/welcome/input/snapshot + shot/hit/kill/unlock/matchEnd/matchReset 事件（协议 v2，FR-N2/N7）
+└─ protocol.ts   # join/welcome/input/snapshot + shot/hit/kill/unlock/matchEnd/matchReset 事件 + rush 彩蛋口令（协议 v2，FR-N2/N7/E1）
 
 apps/server/src/
 ├─ index.ts      # HTTP 健康检查 + Socket.IO RoomManager（M3：按地图多房间/快速加入/空房回收/断线重连会话映射）+ smoke

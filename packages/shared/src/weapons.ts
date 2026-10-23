@@ -1,6 +1,7 @@
 /** 武器数值配置（FR-W5：全部武器数值集中于此，前后端同源加载；M1 单机由客户端消费，M2 服务端用同一份数据做权威结算） */
 
-export type WeaponId = 'pistol' | 'smg' | 'ar' | 'shotgun' | 'sniper' | 'lmg';
+/** 武器 id：6 类常规武器（WEAPON_ORDER 槽位）+ rush 彩蛋冲锋枪（不入槽位，仅由服务端口令授予，FR-E1） */
+export type WeaponId = 'pistol' | 'smg' | 'ar' | 'shotgun' | 'sniper' | 'lmg' | 'rush';
 
 /** 开火模式：semi 半自动（每次点击一发）、auto 全自动（按住连发）、pump 泵动/栓动（低射速点射） */
 export type FireMode = 'semi' | 'auto' | 'pump';
@@ -149,6 +150,25 @@ export const WEAPONS: Record<WeaponId, WeaponSpec> = {
     minDamageMult: 0.5,
     recoil: 1.3,
   },
+  /** 彩蛋冲锋枪（FR-E1）：超高射速 + 超远射程 + 无限弹药（无限弹药语义由库存 rushActive 标志实现，
+   *  不消耗弹匣、不需要换弹）；不入 WEAPON_ORDER，数字键/滚轮/switchTo 白名单均不可选，仅服务端口令授予 */
+  rush: {
+    id: 'rush',
+    nameKey: 'weapon.rush',
+    damage: 16,
+    pellets: 1,
+    fireMode: 'auto',
+    rpm: 1200,
+    magSize: 60,
+    reloadTime: 0,
+    reserveAmmo: 0,
+    spreadDeg: 2,
+    moveSpreadDeg: 2.5,
+    fullDamageRange: 40,
+    maxRange: 60,
+    minDamageMult: 0.7,
+    recoil: 0.35,
+  },
 };
 
 /** rpm → 最小开火间隔（秒） */
@@ -240,6 +260,8 @@ export const WEAPON_TIERS: Record<WeaponId, WeaponTier[]> = {
       killsRequired: 20,
     },
   ],
+  /** 彩蛋冲锋枪无解锁链（固定数值；占位以满足 Record 完整性，tierForKills 恒返回 0） */
+  rush: [{ spec: WEAPONS.rush!, killsRequired: 0 }],
 };
 
 /** 按该类累计击杀数解算当前层级（0 起） */

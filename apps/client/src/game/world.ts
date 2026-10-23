@@ -36,6 +36,8 @@ export interface WorldCallbacks {
   onMatchEnd(reason: 'kills' | 'time', standings: StandingRow[]): void;
   /** 再来一局重置（FR-M4：关闭结算面板） */
   onMatchReset(): void;
+  /** 冲锋枪彩蛋模式激活（FR-E1：服务端授予后经快照 rush 字段同步，客户端全屏提示） */
+  onRushActivated(): void;
 }
 
 const BLOOM_PER_RECOIL = 0.6;
@@ -133,6 +135,8 @@ export class NetWorld {
       const tier = tierForKills(id, kills);
       if (tier > 0) this.inv.setTierSpec(id, specForTier(id, tier));
     }
+    // 断线重连（FR-N5/E1）：重连时若原实体已处于彩蛋模式，恢复本地预测侧状态
+    if (me?.rush === true) this.inv.grantRush(0);
     for (const e of welcome.entities) {
       if (e.id === welcome.playerId) continue;
       this.entities.set(e.id, new RemoteEntity(scene.scene, e, welcome.time));
@@ -240,10 +244,11 @@ export class NetWorld {
         this.local.kills = e.kills;
         this.local.x = e.x;
         this.local.y = e.y;
-        this.inv.resetAll();
+        this.inv.resetAll(); // 彩蛋模式跨重生保留（FR-E1）：服务端 respawn 的 resetAll 同语义
         this.weaponMismatchSince = null;
         this.recoilBloom = 0;
         this.pendingInputs = [];
+        this.syncRush(e);
         return;
       }
       // 位置和解（FR-N4）：对齐权威位置，再重放服务端尚未消费的输入
@@ -256,6 +261,8 @@ export class NetWorld {
       for (const p of this.pendingInputs) this.moveBy(p.moveX, p.moveY, p.dt);
       this.local.hp = e.hp;
       this.local.kills = e.kills;
+      // 冲锋枪彩蛋模式权威同步（FR-E1）：先于武器校正，grantRush 后 current='rush' 与快照一致
+      this.syncRush(e);
       // 权威武器校正：切换输入丢失/被限频丢弃时防两端 current 分叉；
       // ~250ms 去抖以容忍「客户端已预测切枪、服务端快照尚未跟上」的瞬时不一致
       if (e.weaponId !== this.inv.current) {
@@ -287,6 +294,16 @@ export class NetWorld {
       // 死亡期间输入不被消费（服务端清队列、不 ack）；丢弃待重放输入，防止复活时位置漂移
       this.pendingInputs = [];
       this.firePressesPending = 0;
+    }
+  }
+
+  /** 冲锋枪彩蛋模式快照同步（FR-E1）：rush 字段为权威状态，本地预测侧跟随（激活时回调提示一次） */
+  private syncRush(e: SnapshotMsg['entities'][number]): void {
+    if (e.rush === true && !this.inv.rushActive) {
+      this.inv.grantRush(this.localTime);
+      this.cb.onRushActivated();
+    } else if (e.rush !== true && this.inv.rushActive) {
+      this.inv.revokeRush();
     }
   }
 

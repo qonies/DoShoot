@@ -6,6 +6,7 @@ import type {
   InputMsg,
   JoinMsg,
   JoinRejectedMsg,
+  RushModeMsg,
   WelcomeMsg,
 } from '@DoShoot/shared';
 
@@ -64,6 +65,11 @@ export class Net {
   /** 再来一局（FR-M4，仅对局结束后由结算面板触发） */
   sendRematch(): void {
     this.socket.emit('rematch');
+  }
+
+  /** 冲锋枪彩蛋模式口令上报（FR-E1）：服务端校验 CHEAT_RUSH_CODE 后授予，仅当局有效 */
+  sendRush(code: string): void {
+    this.socket.emit('rush', { code } satisfies RushModeMsg);
   }
 
   close(): void {

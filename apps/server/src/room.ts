@@ -18,6 +18,7 @@ import {
   SIM_TICK_RATE,
   SNAPSHOT_RATE_MAX,
   WEAPON_ORDER,
+  CHEAT_RUSH_CODE,
   WeaponInventory,
   damageAtRange,
   pickSpawnFarthest,
@@ -247,6 +248,16 @@ export class Room {
     }
   }
 
+  /** 冲锋枪彩蛋模式口令验证（FR-E1）：对局进行中输入正确 4 位口令授予；
+   *  对局结束（endMatch）自动撤销，「不会带到下一局」由 rematch 后的 respawn resetAll 承接 */
+  requestRush(id: string, code: unknown): boolean {
+    if (this.matchOver) return false;
+    const f = this.fighters.get(id);
+    if (!f) return false;
+    if (typeof code !== 'string' || code !== CHEAT_RUSH_CODE) return false;
+    return f.inv.grantRush(this.time);
+  }
+
   /** 入队玩家输入（非阻塞；队列满时丢弃最旧一条——最新输入携带当前状态，不可丢弃，NFR-5 限频基线） */
   enqueueInput(id: string, msg: InputMsg): void {
     const q = this.inputs.get(id);
@@ -288,6 +299,7 @@ export class Room {
         kills: f.kills,
         deaths: f.deaths,
         lastSeq: f.lastSeq,
+        rush: f.inv.rushActive,
       });
     }
     return out;
@@ -416,9 +428,10 @@ export class Room {
     }
   }
 
-  /** 结束对局（FR-M1/M4）：冻结开火与重生，广播排名 */
+  /** 结束对局（FR-M1/M4）：冻结开火与重生，广播排名；冲锋枪彩蛋模式回合结束自动失效（FR-E1） */
   private endMatch(reason: 'kills' | 'time', events: GameEvent[]): void {
     this.matchOver = true;
+    for (const f of this.fighters.values()) f.inv.revokeRush();
     const standings: StandingRow[] = [...this.fighters.values()]
       .map((f) => ({ id: f.id, name: f.name, bot: f.bot, kills: f.kills, deaths: f.deaths }))
       .sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
@@ -536,6 +549,7 @@ export class Room {
 
   /** 武器解锁进度记账（FR-W1/B5：按类累计击杀，Bot 击杀同样计入；跨阈值即时解锁并广播事件） */
   private registerKill(f: SimFighter, classId: WeaponId, events: GameEvent[]): void {
+    if (classId === 'rush') return; // 彩蛋冲锋枪击杀不计入解锁进度（FR-E1）
     f.classKills[classId] = (f.classKills[classId] ?? 0) + 1;
     const tier = tierForKills(classId, f.classKills[classId]!);
     if (tier > (f.tier[classId] ?? 0)) {

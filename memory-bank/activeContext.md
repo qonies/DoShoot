@@ -1,7 +1,17 @@
 # 活动上下文（Active Context）
 
 ## 当前焦点
-**M4 打磨完善已落地（协议仍 v2，增量兼容）+ 体检修复（2026-10-21）** — 待用户局域网多设备实测验收（60 FPS / 双机开黑 / 平衡性反馈），**重点回归：进局→返回大厅→再进局的渲染**。
+**FR-E1 冲锋枪彩蛋模式已落地（2026-10-23，协议仍 v2 增量兼容）** — 待用户局域网实测验收；此前 M4 体检修复的浏览器专项回归仍待验证（进局→返回大厅→再进局渲染等）。
+
+## 最近变更（2026-10-23 · FR-E1 冲锋枪彩蛋模式）
+- **玩法**：对局中依次输入 4 位口令 **`7890`** + Enter → 切换「狂暴冲锋枪」（1200rpm / 满伤 40·最大射程 60 / 无限弹药不消耗不换弹）；当局跨重生保留，**回合结束（matchEnd）自动撤销，不带到下一局**；断线重连回原状态保留
+- **口令选型**：`CHEAT_RUSH_CODE = '7890'`（shared constants）——刻意不含 1~6，输入过程不误触切枪热键；改口令只动这一处
+- **shared**：`WeaponId` 增加 `'rush'`（不入 `WEAPON_ORDER`，切枪白名单运行时拒绝）+ `WEAPONS.rush` 数值 + `WEAPON_TIERS.rush` 占位（tierForKills 恒 0）；`WeaponInventory` 新增 `rushActive` 标志 + `grantRush/revokeRush`（canFire 跳过弹药校验 / consumeAmmo no-op / startReload 禁用 / resetAll 跨重生保留 rush）；协议增量：`EntitySnapshot.rush?` 可选字段 + C2S `RushModeMsg`（v2 前后端互相兼容）
+- **服务端**：`room.ts requestRush(id, code)` 口令验证（matchOver 拒绝）→ `inv.grantRush`；快照带 `rush`；`endMatch` 全员 `revokeRush`；`registerKill` 跳过 'rush'（不计解锁进度）；`index.ts` 新增 `rush` 消息路由
+- **客户端**：`input.ts` 数字口令缓冲（Digit/Numpad 均可，3s 超时/Enter/失焦清空，命中口令置 `cheatRush` 边沿）→ `main.ts` `net.sendRush`；`world.ts` 快照 rush 字段权威同步（`syncRush`，激活回调 `onRushActivated` → 全屏横幅 + unlock 音效）；HUD 弹药位 rush 时显示 ∞（`hud.setWeapon` 参数放宽为 number|string）；i18n 新增 `weapon.rush` / `rush.on`（67 键）
+- **测试**：`unit` 64→86 项（新增库存彩蛋模式 22 断言：授予/无限弹药/白名单/跨重生保留/撤销/切枪放弃）；`smoke:net` 新增 4c 步（错误口令无效 → 正确口令授予 → 持续开火 2s 弹药恒满）
+- **边界行为**：彩蛋模式中手动切枪 = 主动放弃（`switchTo` 复位 rushActive，可重新输口令激活），避免无限弹药泄漏到切过去的常规武器
+- 验证：`unit` 81 全过 / `typecheck` 全过 / `check:i18n` OK（67 键）/ `smoke:net` ALL PASS / `build` 成功（gzip 149.7KB）
 
 ## 最近变更（2026-10-21 · 体检修复落地）
 - **P1 渲染**：`scene.ts` 移除 `renderer.forceContextLoss()`——同 canvas 重建 renderer 时 getContext 返回已丢失上下文（无 restoreContext 不恢复），二次进局有黑屏风险；`dispose()` 已足够释放资源

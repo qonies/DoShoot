@@ -56,11 +56,11 @@ export class Hud {
     this.hpText.textContent = `${Math.ceil(pct)}`;
   }
 
-  setWeapon(name: string, ammo: number, reserve: number, reloadProgress: number | null): void {
+  setWeapon(name: string, ammo: number | string, reserve: number | string, reloadProgress: number | null): void {
     this.weaponName.textContent = name;
     this.ammoMag.textContent = `${ammo}`;
-    this.ammoReserve.textContent = ` / ${reserve}`;
-    this.ammoMag.classList.toggle('empty', ammo === 0 && reloadProgress === null);
+    this.ammoReserve.textContent = reserve === '' ? '' : ` / ${reserve}`;
+    this.ammoMag.classList.toggle('empty', ammo === 0 || ammo === '0');
     if (reloadProgress !== null) {
       this.reloadBar.classList.remove('hidden');
       this.reloadText.classList.remove('hidden');

@@ -35,6 +35,8 @@
   "weapon.lmg": "轻机枪",
   "weapon.lmg.t2": "重型机枪",
   "weapon.lmg.t3": "速射机枪",
+  "weapon.rush": "狂暴冲锋枪",
+  "rush.on": "冲锋枪模式已激活！超高射速 · 超远射程 · 无限弹药（仅本局有效）",
   "hud.kills": "击杀",
   "hud.reloading": "换弹中…",
   "hud.eliminated": "击杀！",

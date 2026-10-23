@@ -4,6 +4,12 @@ import type { WeaponId } from './weapons';
 
 // ---------- C2S ----------
 
+/** 冲锋枪彩蛋模式口令上报（FR-E1）：客户端在对局中输入 4 位数字 + Enter 后发送，
+ *  服务端校验 CHEAT_RUSH_CODE 后授予；仅当局有效 */
+export interface RushModeMsg {
+  code: string;
+}
+
 /** 进房请求（FR-N7：版本不匹配拒绝进入；M3 扩展：地图/难度选择、断线重连、武器进度上报） */
 export interface JoinMsg {
   version: number;
@@ -70,6 +76,9 @@ export interface EntitySnapshot {
   deaths: number;
   /** 服务端已消费的该实体最后一条输入 seq（客户端预测和解 ack，FR-N4；非本地玩家恒 0） */
   lastSeq: number;
+  /** 冲锋枪彩蛋模式激活中（FR-E1，增量可选字段，协议 v2 前后端互相兼容）；
+   *  客户端据此把本地预测库存切到 rush / 撤回手枪 */
+  rush?: boolean;
 }
 
 /** 结算/计分板排名行（FR-M4：排名、K/D；武器统计简化为按类击杀，见 requirements v0.3.0） */

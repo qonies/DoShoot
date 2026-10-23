@@ -1,6 +1,7 @@
-/** 键鼠输入：WASD 移动、鼠标瞄准、开火（含按下沿）、换弹/切枪指令（FR-C1/C2、FR-W3、FR-U1 准星跟随） */
+/** 键鼠输入：WASD 移动、鼠标瞄准、开火（含按下沿）、换弹/切枪指令（FR-C1/C2、FR-W3、FR-U1 准星跟随）
+ *  以及冲锋枪彩蛋口令缓冲（FR-E1：数字键依次输入 + Enter 上报，口令不含 1~6 不与切枪热键冲突） */
 
-import { WEAPON_ORDER, type WeaponId } from '@DoShoot/shared';
+import { CHEAT_RUSH_CODE, WEAPON_ORDER, type WeaponId } from '@DoShoot/shared';
 
 /** 一帧内的输入指令（消费型：consumeCommands 读取后一次性标志复位） */
 export interface InputCommand {
@@ -13,6 +14,8 @@ export interface InputCommand {
   switchTo: WeaponId | null;
   /** 滚轮步数（向下为正） */
   wheel: number;
+  /** 本帧内输入了正确的冲锋枪彩蛋口令并按下 Enter（FR-E1，边缘触发） */
+  cheatRush: boolean;
 }
 
 export class Input {
@@ -29,6 +32,12 @@ export class Input {
   private reloadEdge = false;
   private switchRequest: WeaponId | null = null;
   private wheelSteps = 0;
+  /** 彩蛋口令数字缓冲（FR-E1）：记录最近按下的数字，Enter 时整体比对；超时/回车/失焦清空 */
+  private codeBuffer = '';
+  private codeBufferAt = 0;
+  private cheatRushEdge = false;
+  /** 口令输入超时（毫秒）：间隔过久的数字不视为同一次输入 */
+  private static CODE_BUFFER_TIMEOUT_MS = 3000;
 
   private readonly onKeyDown = (e: KeyboardEvent): void => {
     this.keys.add(e.code);
@@ -37,6 +46,17 @@ export class Input {
     if (e.code.startsWith('Digit')) {
       const n = Number(e.code.slice(5));
       if (n >= 1 && n <= WEAPON_ORDER.length) this.switchRequest = WEAPON_ORDER[n - 1]!;
+    }
+    // 彩蛋口令缓冲（FR-E1）：主键盘 + 小键盘数字均入缓冲；口令 7890 不含 1~6，不影响上方切枪
+    const digit = /^(?:Digit|Numpad)([0-9])$/.exec(e.code);
+    if (digit) {
+      if (performance.now() - this.codeBufferAt > Input.CODE_BUFFER_TIMEOUT_MS) this.codeBuffer = '';
+      this.codeBuffer = (this.codeBuffer + digit[1]).slice(-8);
+      this.codeBufferAt = performance.now();
+    }
+    if (e.code === 'Enter' || e.code === 'NumpadEnter') {
+      if (this.codeBuffer === CHEAT_RUSH_CODE) this.cheatRushEdge = true;
+      this.codeBuffer = '';
     }
   };
 
@@ -81,6 +101,7 @@ export class Input {
   private readonly onBlur = (): void => {
     this.keys.clear();
     this.firing = false;
+    this.codeBuffer = '';
   };
 
   constructor(canvas: HTMLCanvasElement) {
@@ -130,11 +151,13 @@ export class Input {
       reload: this.reloadEdge,
       switchTo: this.switchRequest,
       wheel: this.wheelSteps,
+      cheatRush: this.cheatRushEdge,
     };
     this.firePressedEdge = false;
     this.reloadEdge = false;
     this.switchRequest = null;
     this.wheelSteps = 0;
+    this.cheatRushEdge = false;
     return cmd;
   }
 }

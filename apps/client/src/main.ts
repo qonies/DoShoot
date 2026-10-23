@@ -3,6 +3,7 @@
 import './style.css';
 import * as THREE from 'three';
 import {
+  CHEAT_RUSH_CODE,
   DEFAULT_MAP,
   MAPS,
   PROTOCOL_VERSION,
@@ -206,8 +207,9 @@ function runGameLoop(net: Net, welcome: WelcomeMsg): () => void {
     },
     // FR-W1：本人解锁 → 全屏提示
     onUnlock: (nameKey) => hud.showUnlock(`${t('unlock.prefix')}${t(nameKey)}`),
-    // FR-A1：本人击杀 → localStorage 进度累计（跨局保留成长）
+    // FR-A1：本人击杀 → localStorage 进度累计（跨局保留成长）；彩蛋冲锋枪不计入（FR-E1）
     onOwnKill: (classId) => {
+      if (classId === 'rush') return;
       const p = loadProgress();
       p[classId] = (p[classId] ?? 0) + 1;
       saveProgress(p);
@@ -215,6 +217,11 @@ function runGameLoop(net: Net, welcome: WelcomeMsg): () => void {
     // FR-M4：结算面板 + 再来一局/返回大厅
     onMatchEnd: (reason, standings) => hud.showSettlement(reason, standings, world.selfId),
     onMatchReset: () => hud.hideSettlement(),
+    // FR-E1：冲锋枪彩蛋模式激活 → 全屏提示（服务端口令验证通过后的快照回调）
+    onRushActivated: () => {
+      hud.showUnlock(t('rush.on'));
+      sfx.unlock();
+    },
   }, welcome);
   const input = new Input(canvas);
   const aim = new THREE.Vector2();
@@ -309,6 +316,8 @@ function runGameLoop(net: Net, welcome: WelcomeMsg): () => void {
 
     const cmd = input.consumeCommands();
     gameScene.screenToGround(input.mouseNdcX, input.mouseNdcY, aim);
+    // 冲锋枪彩蛋模式口令上报（FR-E1）：客户端校验通过后由服务端权威授予
+    if (cmd.cheatRush) net.sendRush(CHEAT_RUSH_CODE);
     world.update(dt, cmd, aim.x, aim.y);
 
     // 上行输入节流（~30Hz，FR-N1）
@@ -321,10 +330,12 @@ function runGameLoop(net: Net, welcome: WelcomeMsg): () => void {
     // HUD 刷新（FR-U1/C3/C4/U5）
     hud.setHealth(world.local.hp);
     const spec = world.inv.spec;
+    // 彩蛋模式无限弹药：弹药位显示 ∞（FR-E1）
+    const rush = world.inv.rushActive;
     hud.setWeapon(
       t(spec.nameKey),
-      world.inv.state.ammo,
-      world.inv.state.reserve,
+      rush ? '∞' : world.inv.state.ammo,
+      rush ? '' : world.inv.state.reserve,
       world.reloadProgress(),
     );
     hud.setKills(world.local.kills);

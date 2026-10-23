@@ -41,6 +41,11 @@ export const RECONNECT_GRACE = 30;
 /** 空房间回收（毫秒，FR-N6） */
 export const ROOM_RECYCLE_MS = 60_000;
 
+/** 冲锋枪彩蛋模式口令（FR-E1）：对局中依次输入该 4 位数字 + Enter 激活——
+ *  高射速 / 远射程 / 无限弹药的特殊冲锋枪，仅当局有效（对局结束/下一局自动失效）。
+ *  特意选用不含 1~6 的数字组合：1~6 是切枪热键，输入口令过程不误触切枪。 */
+export const CHEAT_RUSH_CODE = '7890';
+
 /** 远端实体插值缓冲延迟（秒，FR-N3）：客户端 entities.ts 同源消费，也是 M4 延迟补偿回溯的基准分量 */
 export const INTERP_DELAY = 0.1;
 /** 延迟补偿（FR-N4，M4）：服务端实体位置历史时长（秒）与单次回溯上限（秒） */

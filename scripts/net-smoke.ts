@@ -6,6 +6,7 @@ import type { AddressInfo } from 'node:net';
 import { Server } from 'socket.io';
 import { io as Client, type Socket } from 'socket.io-client';
 import {
+  CHEAT_RUSH_CODE,
   MAPS,
   PROTOCOL_VERSION,
   SNAPSHOT_RATE_MAX,
@@ -61,6 +62,12 @@ io.on('connection', (socket) => {
   });
   socket.on('input', (m: InputMsg) => {
     if (joined) sessions.get(socket.id)?.enqueueInput(socket.id, m);
+  });
+  // 冲锋枪彩蛋模式（FR-E1，与 index.ts 同语义）：口令上报转发给房间验证
+  socket.on('rush', (raw: unknown) => {
+    if (!joined) return;
+    const code = raw !== null && typeof raw === 'object' ? (raw as { code?: unknown }).code : null;
+    sessions.get(socket.id)?.requestRush(socket.id, code);
   });
   socket.on('disconnect', () => {
     sessions.get(socket.id)?.markDisconnected(socket.id); // FR-N5：宽限期内保留实体
@@ -246,6 +253,28 @@ async function run(): Promise<void> {
     } else {
       console.log('[smoke:net] fire+reload OK (mag emptied → auto-reload completed)');
     }
+
+    // 4c) 冲锋枪彩蛋模式（FR-E1）：错误口令无效；正确口令 → 快照 weaponId='rush' 且 rush=true；
+    //     持续开火弹药不消耗（无限弹药）。彩蛋模式跨重生保留，被 Bot 击杀也不影响断言。
+    c1.socket.emit('rush', { code: '0000' });
+    await sleep(300);
+    if (meAt()?.rush === true) fail('wrong code must not grant rush mode (FR-E1)');
+    c1.socket.emit('rush', { code: CHEAT_RUSH_CODE });
+    const rushed = await waitForAlive(
+      () => meAt()?.weaponId === 'rush' && meAt()?.rush === true,
+      4000,
+    );
+    if (rushed !== 'ok') fail(`rush mode not granted after correct code: last=${JSON.stringify(meAt())}`);
+    const rushFireTimer = setInterval(() => fireInput(true), 33);
+    await sleep(2000);
+    clearInterval(rushFireTimer);
+    fireInput(false);
+    const meRush = meAt();
+    if (!meRush || meRush.weaponId !== 'rush' || meRush.rush !== true) {
+      fail(`rush mode lost while firing: last=${JSON.stringify(meRush)}`);
+    }
+    if (meRush.ammo !== 60) fail(`rush ammo must stay full (infinite), got ${meRush.ammo}`);
+    console.log('[smoke:net] rush cheat mode OK (correct code grants, infinite ammo while firing)');
 
     // 5) 断线移除（FR-N5 语义由服务端宽限期承接；此处断开后 30s 内仍可见，故直接校验「最终移除」窗口）
     //    为保持冒烟快速，这里断开 c1 并等待其进入宽限期后仍存在 → 跳过旧的「立即移除」断言，

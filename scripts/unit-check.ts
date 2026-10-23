@@ -130,6 +130,41 @@ ok('isWall 越界视为墙', isWall(map, -1, 5) && isWall(map, 5, 999));
   eq('resetAll 手枪满匣', inv.state.ammo, WEAPONS.pistol!.magSize);
 }
 
+// ---------- WeaponInventory 冲锋枪彩蛋模式（FR-E1：无限弹药/白名单/跨重生保留/回合结束撤销） ----------
+{
+  const inv = new WeaponInventory();
+  const t0 = 10;
+  ok('grantRush 授予', inv.grantRush(t0));
+  eq('授予后当前武器=rush', inv.current, 'rush');
+  eq('rush 满匣', inv.state.ammo, WEAPONS.rush!.magSize);
+  ok('切枪硬直内不可开火', !inv.canFire(t0 + 0.1));
+  inv.markFired(t0 + 0.3);
+  inv.consumeAmmo();
+  eq('无限弹药：开火后弹匣不消耗', inv.state.ammo, WEAPONS.rush!.magSize);
+  ok('无限弹药：startReload 被禁用', !inv.startReload(t0 + 0.3));
+  ok('switchTo 白名单拒绝 rush（切枪输入不可获得/切走）', !inv.switchTo('rush', t0 + 0.4));
+  // 跨重生保留（resetAll 后仍持 rush 满匣）
+  inv.resetAll();
+  eq('resetAll 后仍持 rush（跨重生保留）', inv.current, 'rush');
+  eq('resetAll 后 rush 满匣', inv.state.ammo, WEAPONS.rush!.magSize);
+  // 回合结束撤销 → 回手枪满匣
+  ok('revokeRush 撤销', inv.revokeRush());
+  eq('撤销后回手枪', inv.current, 'pistol');
+  eq('撤销后手枪满匣', inv.state.ammo, WEAPONS.pistol!.magSize);
+  ok('未激活时重复撤销返回 false', !inv.revokeRush());
+  ok('撤销后可重新授予', inv.grantRush(t0 + 1));
+  ok('已激活时重复授予返回 false', !inv.grantRush(t0 + 1.1));
+  // 彩蛋武器无解锁链：tierForKills 恒 0
+  eq('rush 无解锁链（恒 T1）', tierForKills('rush', 999), 0);
+  eq('rush 数值定位（specForTier）', specForTier('rush', 0).id, 'rush');
+  // 彩蛋模式中手动切枪 = 主动放弃（rushActive 复位，可重新激活）
+  ok('彩蛋模式中切枪成功', inv.switchTo('ar', t0 + 2));
+  eq('切枪后 rushActive 复位', inv.rushActive, false);
+  eq('切枪后当前武器=ar', inv.current, 'ar');
+  ok('放弃后可重新授予', inv.grantRush(t0 + 2.1));
+  eq('重新授予后回到 rush', inv.current, 'rush');
+}
+
 // ---------- 解锁链 tierForKills / specForTier（FR-W1） ----------
 {
   eq('0 杀=T1', tierForKills('pistol', 0), 0);

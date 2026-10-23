@@ -180,6 +180,14 @@ io.on('connection', (socket) => {
     if (s) s.room.enqueueInput(s.fighterId, msg);
   });
 
+  // 冲锋枪彩蛋模式（FR-E1）：客户端输入口令后上报，服务端校验授予（仅当局有效）
+  socket.on('rush', (raw: unknown) => {
+    if (!joined) return;
+    const code = raw !== null && typeof raw === 'object' ? (raw as { code?: unknown }).code : null;
+    const s = sessions.get(socket.id);
+    if (s) s.room.requestRush(s.fighterId, code);
+  });
+
   socket.on('rematch', () => {
     if (!joined) return;
     const s = sessions.get(socket.id);

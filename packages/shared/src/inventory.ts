@@ -20,12 +20,16 @@ export class WeaponInventory {
   readonly states: Record<WeaponId, WeaponRuntime>;
   /** 各武器层级数值覆盖（FR-W1 解锁链；未覆盖的类回落 WEAPONS 基础值） */
   private readonly tierSpecs: Partial<Record<WeaponId, WeaponSpec>> = {};
+  /** 冲锋枪彩蛋模式激活中（FR-E1，服务端口令验证后授予 / 回合结束撤销；
+   *  激活期间：无限弹药不消耗、无需换弹、跨重生保留） */
+  rushActive = false;
 
   constructor() {
     this.states = {} as Record<WeaponId, WeaponRuntime>;
     for (const id of WEAPON_ORDER) {
       this.states[id] = this.freshRuntime(id);
     }
+    this.states.rush = this.freshRuntime('rush');
   }
 
   /** 层级解算后的运行时初始状态（弹匣/备弹按当前层级数值） */
@@ -56,18 +60,48 @@ export class WeaponInventory {
     this.states[id] = this.freshRuntime(id);
   }
 
-  /** 重置全部武器（重生时调用；保留已解锁层级） */
+  /** 重置全部武器（重生时调用；保留已解锁层级）。
+   *  冲锋枪彩蛋模式（FR-E1）跨重生保留：rushActive 时重置后仍持 rush 满匣；
+   *  「不带到下一局」由服务端回合结束时 revokeRush 后的 resetAll 承接。 */
   resetAll(): void {
     for (const id of WEAPON_ORDER) {
       this.resetRuntime(id);
     }
-    this.current = 'pistol';
+    this.states.rush = this.freshRuntime('rush');
+    this.current = this.rushActive ? 'rush' : 'pistol';
   }
 
-  /** 切枪（打断换弹，FR-W3）；返回是否成功切换 */
+  /** 授予冲锋枪彩蛋模式（FR-E1，服务端口令验证后调用）：切至 rush 满匣，带切枪硬直；已激活返回 false */
+  grantRush(now: number): boolean {
+    if (this.rushActive) return false;
+    this.rushActive = true;
+    this.states.rush = this.freshRuntime('rush');
+    this.states[this.current].reloadEnd = null;
+    this.current = 'rush';
+    this.state.nextFireReady = Math.max(this.state.nextFireReady, now + SWITCH_DELAY);
+    return true;
+  }
+
+  /** 撤销冲锋枪彩蛋模式（FR-E1，回合结束调用）：切回手枪满匣；未激活返回 false */
+  revokeRush(): boolean {
+    if (!this.rushActive) return false;
+    this.rushActive = false;
+    if (this.current === 'rush') {
+      this.current = 'pistol';
+      this.resetRuntime('pistol');
+    }
+    return true;
+  }
+
+  /** 切枪（打断换弹，FR-W3）；返回是否成功切换。
+   *  白名单仅含 WEAPON_ORDER（NFR-5）：rush 彩蛋武器不可经切枪输入获得/切走（FR-E1）。
+   *  彩蛋模式中手动切枪 = 主动放弃彩蛋（rushActive 复位，可重新输入口令再次激活），
+   *  避免无限弹药语义泄漏到切过去的常规武器上。 */
   switchTo(id: WeaponId, now: number): boolean {
     // 非法 id 防御（NFR-5）：未知武器会让 spec/state 取值 undefined
+    // 运行时数组不含 'rush'（类型层面已入联合），白名单仍然拒绝 rush 与非法 id（NFR-5/FR-E1）
     if (!WEAPON_ORDER.includes(id) || id === this.current) return false;
+    this.rushActive = false;
     this.states[this.current].reloadEnd = null;
     this.current = id;
     this.state.nextFireReady = Math.max(this.state.nextFireReady, now + SWITCH_DELAY);
@@ -82,8 +116,9 @@ export class WeaponInventory {
     this.switchTo(next, now);
   }
 
-  /** 开始换弹；已在换弹/满匣/无备弹时忽略 */
+  /** 开始换弹；已在换弹/满匣/无备弹时忽略；彩蛋模式无限弹药无需换弹（FR-E1） */
   startReload(now: number): boolean {
+    if (this.rushActive) return false;
     const s = this.state;
     const spec = this.spec;
     if (s.reloadEnd !== null || s.ammo >= spec.magSize || s.reserve <= 0) return false;
@@ -105,10 +140,13 @@ export class WeaponInventory {
 
   canFire(now: number): boolean {
     const s = this.state;
+    // 彩蛋模式无限弹药：不校验弹匣（FR-E1）
+    if (this.rushActive) return s.reloadEnd === null && now >= s.nextFireReady;
     return s.reloadEnd === null && s.ammo > 0 && now >= s.nextFireReady;
   }
 
   consumeAmmo(): void {
+    if (this.rushActive) return; // 彩蛋模式弹药不消耗（FR-E1）
     this.state.ammo--;
   }
 
@@ -119,7 +157,7 @@ export class WeaponInventory {
   /** 换弹进度 0..1；未在换弹返回 null（快照/HUD 用） */
   reloadProgress(now: number): number | null {
     const s = this.state;
-    if (s.reloadEnd === null) return null;
+    if (s.reloadEnd === null) return null; // rush 彩蛋模式禁用换弹，reloadEnd 恒为 null（FR-E1）
     const total = this.spec.reloadTime;
     return Math.min(1, Math.max(0, 1 - (s.reloadEnd - now) / total));
   }
