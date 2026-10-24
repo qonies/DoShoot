@@ -40,6 +40,9 @@ export class Input {
   private static CODE_BUFFER_TIMEOUT_MS = 3000;
 
   private readonly onKeyDown = (e: KeyboardEvent): void => {
+    // 设置/结算面板打开期间屏蔽游戏键（面板期间移动/切枪/换弹/口令输入均为误操作）；
+    // keyup 不屏蔽：面板打开瞬间按住的键仍可在其上松开清除
+    if (Input.isGameInputBlocked()) return;
     this.keys.add(e.code);
     if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space'].includes(e.code)) e.preventDefault();
     if (e.code === 'KeyR') this.reloadEdge = true;
@@ -75,6 +78,14 @@ export class Input {
   /** UI 面板（设置/结算）上的点击与滚轮不应触发开火/切枪（面板是 pointer-events:auto 的 DOM 覆盖层） */
   private static isUiTarget(e: Event): boolean {
     return e.target instanceof Element && e.target.closest('#settings, #settlement') !== null;
+  }
+
+  /** 设置/结算面板是否处于打开状态（键盘输入屏蔽判据，与 isUiTarget 的鼠标判据配套） */
+  private static isGameInputBlocked(): boolean {
+    return (
+      document.querySelector('#settings')?.classList.contains('hidden') === false ||
+      document.querySelector('#settlement')?.classList.contains('hidden') === false
+    );
   }
 
   private readonly onMouseDown = (e: MouseEvent): void => {

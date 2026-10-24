@@ -1,7 +1,7 @@
 /** 武器库存状态机（前后端同源）：弹匣/备弹、换弹进度、切枪打断换弹（FR-W3/W4/W5）
  *  服务端为权威实例；客户端持预测实例仅用于表现，弹药漂移时按快照校正。 */
 
-import { WEAPONS, WEAPON_ORDER, fireIntervalSec, type WeaponId, type WeaponSpec } from './weapons';
+import { WEAPONS, WEAPON_ORDER, fireIntervalSec, nextWeaponId, type WeaponId, type WeaponSpec } from './weapons';
 
 export interface WeaponRuntime {
   ammo: number;
@@ -110,10 +110,7 @@ export class WeaponInventory {
 
   /** 滚轮顺序切换 */
   cycle(delta: number, now: number): void {
-    const len = WEAPON_ORDER.length;
-    const idx = WEAPON_ORDER.indexOf(this.current);
-    const next = WEAPON_ORDER[(idx + delta + len) % len]!;
-    this.switchTo(next, now);
+    this.switchTo(nextWeaponId(this.current, delta), now);
   }
 
   /** 开始换弹；已在换弹/满匣/无备弹时忽略；彩蛋模式无限弹药无需换弹（FR-E1） */

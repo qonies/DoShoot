@@ -72,6 +72,11 @@ export class Net {
     this.socket.emit('rush', { code } satisfies RushModeMsg);
   }
 
+  /** 主动离开对局（返回大厅）：服务端立即移除实体，不走 30s 断线宽限（FR-N5/N6 语义区分） */
+  sendLeave(): void {
+    this.socket.emit('leave');
+  }
+
   close(): void {
     if (this.pingTimer !== null) {
       clearInterval(this.pingTimer);

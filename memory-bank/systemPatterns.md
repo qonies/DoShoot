@@ -13,9 +13,10 @@
 - **权威服务端**：所有移动校验、命中判定、伤害结算在服务端；客户端只做表现与预测。（M1 现状：单机模式权威逻辑暂在客户端 `world.ts`，M2 迁移至服务端模拟）
 - **同步策略**：服务端 accumulator 固定步长 30Hz 模拟，快照按唤醒频率 20~30Hz 广播（V1 全量快照、JSON；增量编码后置至 M4，决策 #8）；V1 广播范围为整个房间（10 人全量），**不做兴趣区域过滤**（V2 视规模再引入）。客户端 60fps 渲染，其他玩家用缓冲插值（~100ms），自己用预测 + 服务端和解（seq ack + 未确认输入重放）。
 - **帧循环分离**：服务端固定步长模拟（accumulator 模式），客户端 rAF 渲染。
-- **协议**：消息类型集中定义于 shared（C2S: input/join/switch/reload；S2C: snapshot/hit/kill/spawn/event）。
+- **协议**：消息类型集中定义于 shared（C2S: join/input/ping/rush/rematch/leave；S2C: welcome/joinRejected/snapshot/pong；对局事件随快照捎带：shot/hit/kill/unlock/matchEnd/matchReset）。
 - **地图即数据**：JSON tile 地图，一处定义两端使用。
 - **武器数值同源**：`packages/shared/src/weapons.ts` 单一数值源（伤害/射速/弹匣/换弹/散布/射程衰减），前后端消费同一份（FR-W5）。
+- **对局与房间生命周期语义（v0.3.4 定稿）**：对局属性（killTarget/timeLimitSec）为建房时确定的房间属性，选房只匹配「地图 + 规则」相同者（快速加入不混规则，无匹配则随机地图新建）；空房被复用（回收等待期 ≤60s）时先重置对局再迎新（`Room.resetMatch`）；中途加入已结束房间经 `WelcomeMsg.matchEnd?` 补发最近一次结算；断线 30s 宽限仅适用于意外断线，主动离开走 C2S `leave` 立即移除实体（客户端同时清除 rejoinId 凭据）；`rematch` 不改变断线状态（宽限清扫/rejoin 语义保持）。切枪意图（数字键/滚轮）由客户端统一折算为 `switchTo` 上报（shared `nextWeaponId`），本地预测与上报同源。
 
 ## M2 战斗/网络模块结构（2026-10-18 落地，权威服务端已实现）
 ```
@@ -25,7 +26,7 @@ packages/shared/src/
 ├─ combat.ts     # resolveShot 纯函数开火解算（散布/多弹丸/射线判定；两端共用杜绝分叉）
 ├─ map.ts        # 地图数据 + MAPS 注册表（M3：range 靶场 + alley 狭巷）+ pickSpawnFarthest
 ├─ collision.ts  # 圆-网格碰撞解算 / DDA 射线 / rayVsAABB（含零分量加固）
-└─ protocol.ts   # join/welcome/input/snapshot + shot/hit/kill/unlock/matchEnd/matchReset 事件 + rush 彩蛋口令（协议 v2，FR-N2/N7/E1）
+└─ protocol.ts   # join/welcome(+matchEnd 结算补发)/input/snapshot + ping/pong + C2S rush/leave + shot/hit/kill/unlock/matchEnd/matchReset 事件（协议 v2，FR-N2/N7/E1/L7）
 
 apps/server/src/
 ├─ index.ts      # HTTP 健康检查 + Socket.IO RoomManager（M3：按地图多房间/快速加入/空房回收/断线重连会话映射）+ smoke

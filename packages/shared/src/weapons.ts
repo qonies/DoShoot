@@ -46,6 +46,15 @@ export const WEAPON_ORDER: readonly WeaponId[] = [
   'lmg',
 ];
 
+/** 滚轮顺序切换的目标武器（FR-W4）：从 WEAPON_ORDER 当前槽位按 delta 环绕取下一把。
+ *  current 为 rush 彩蛋武器（不在槽位，indexOf = -1）时沿用 WeaponInventory.cycle 的历史语义：
+ *  向下(+1)回手枪、向上(-1)回狙击枪。客户端预测与 buildInput 上报共用此函数，保证两端一致。 */
+export function nextWeaponId(current: WeaponId, delta: number): WeaponId {
+  const len = WEAPON_ORDER.length;
+  const idx = WEAPON_ORDER.indexOf(current);
+  return WEAPON_ORDER[(idx + delta + len) % len]!;
+}
+
 /** 6 类武器数值表（对照需求 4.3 表格：伤害 / 射速 / 弹匣 / 换弹） */
 export const WEAPONS: Record<WeaponId, WeaponSpec> = {
   pistol: {

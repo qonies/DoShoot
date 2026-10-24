@@ -75,6 +75,16 @@ io.on('connection', (socket) => {
     const code = raw !== null && typeof raw === 'object' ? (raw as { code?: unknown }).code : null;
     sessions.get(socket.id)?.requestRush(socket.id, code);
   });
+  // 主动离开（与 index.ts 同语义，FR-N5/N6）：立即移除实体，不走断线 30s 宽限
+  socket.on('leave', () => {
+    if (!joined) return;
+    const r = sessions.get(socket.id);
+    if (r) {
+      r.removePlayer(socket.id);
+      sessions.delete(socket.id);
+      socket.leave(r.id);
+    }
+  });
   socket.on('disconnect', () => {
     sessions.get(socket.id)?.markDisconnected(socket.id); // FR-N5：宽限期内保留实体
     sessions.delete(socket.id);
@@ -341,6 +351,36 @@ async function run(): Promise<void> {
       fail(`custom rule room should use 600s time limit, got matchTimeLeft=${c4snap?.matchTimeLeft}`);
     }
     console.log(`[smoke:net] custom match rule OK (50 kills / 600s, matchTimeLeft=${Math.round(c4snap.matchTimeLeft!)}s)`);
+
+    // 7b) 主动离开（FR-N5/N6 修复回归）：leave 立即移除实体（停止快照下发）；
+    //     随后凭旧 rejoinId 进房被视为新玩家（不再被重连回原对局）。
+    //     注意两段式基线：leave 处理前已在途的最后一帧快照仍会送达，先排空再断言「不再有新快照」
+    c4.socket.emit('leave');
+    await sleep(200); // 排空在途快照（leave 处理前的最后一次广播）
+    const snapsAfterLeave = c4.snapshots.length;
+    await sleep(400);
+    if (c4.snapshots.length > snapsAfterLeave) {
+      fail('leave must remove the fighter immediately (snapshots must stop)');
+    }
+    const afterLeave = Client(`http://localhost:${PORT}`, { transports: ['websocket'] });
+    const freshId = await new Promise<string>((resolve) => {
+      const to = setTimeout(() => resolve(''), 3000);
+      afterLeave.on('welcome', (w: WelcomeMsg) => {
+        clearTimeout(to);
+        resolve(w.playerId);
+        afterLeave.close();
+      });
+      afterLeave.connect();
+      afterLeave.emit('join', {
+        version: PROTOCOL_VERSION,
+        nickname: 'Tester-4',
+        rejoinId: c4.welcome!.playerId,
+      });
+    });
+    if (freshId === '' || freshId === c4.welcome!.playerId) {
+      fail(`fresh join expected after active leave (got ${freshId || 'timeout'})`);
+    }
+    console.log('[smoke:net] active leave OK (entity removed immediately, rejoin id invalidated)');
     c4.socket.close();
 
     c2.socket.close();

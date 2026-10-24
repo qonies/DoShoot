@@ -128,6 +128,14 @@ function startGame(kind: 'quick' | 'map'): void {
 
   const net = new Net({
     onWelcome: (welcome) => {
+      // FR-N7 防御：welcome 版本不匹配（join 已被服务端校验，此处兜底）按版本不一致处理
+      if (welcome.version !== PROTOCOL_VERSION) {
+        connecting = false;
+        net.close();
+        backToLobby();
+        showNetMsg('net.versionMismatch');
+        return;
+      }
       connecting = false;
       inGame = true;
       hideNetMsg();
@@ -195,12 +203,66 @@ nicknameInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') startGame('map');
 });
 
+// ---------- 设置面板（FR-L5，M4）：模块级一次性绑定 ----------
+// 修复：此前每局 runGameLoop 都重新注册一遍（音量/BGM/画质/语言/关闭/Esc），重复进局会叠加
+// 监听器并让旧 GameScene 被闭包持有——现在只绑定一次，画质切换经 activeScene 作用于当前对局。
+const settingsEl = document.querySelector<HTMLDivElement>('#settings')!;
+const volumeSlider = document.querySelector<HTMLInputElement>('#setVolume')!;
+const bgmSlider = document.querySelector<HTMLInputElement>('#setBgm')!;
+const qualitySel = document.querySelector<HTMLSelectElement>('#setQuality')!;
+const langSel = document.querySelector<HTMLSelectElement>('#setLang')!;
+/** 当前对局的场景引用：进局赋值、退出置空（画质分档即时生效用） */
+let activeScene: GameScene | null = null;
+function syncSettingsUi(): void {
+  volumeSlider.value = `${Math.round(settings.volume * 100)}`;
+  bgmSlider.value = `${Math.round(settings.bgm * 100)}`;
+  qualitySel.value = settings.quality;
+  langSel.value = getLang();
+}
+syncSettingsUi();
+window.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || !inGame) return;
+  syncSettingsUi();
+  settingsEl.classList.toggle('hidden');
+});
+document.querySelector('#setClose')!.addEventListener('click', () => settingsEl.classList.add('hidden'));
+volumeSlider.addEventListener('input', () => {
+  settings.volume = Number(volumeSlider.value) / 100;
+  applyAudioSettings(settings);
+  saveSettings(settings);
+});
+bgmSlider.addEventListener('input', () => {
+  settings.bgm = Number(bgmSlider.value) / 100;
+  applyAudioSettings(settings);
+  saveSettings(settings);
+});
+qualitySel.addEventListener('change', () => {
+  settings.quality = qualitySel.value as GameSettings['quality'];
+  activeScene?.setQuality(settings.quality);
+  saveSettings(settings);
+});
+langSel.addEventListener('change', () => {
+  setLang(langSel.value as 'zh' | 'en'); // i18n 模块持久化 + applyDom（含小地图外的全部 data-i18n）
+  refreshLangUi(); // 按钮标签/操作提示不走 data-i18n，需手动刷新
+});
+
 // ---------- 联机对局主循环 ----------
 function runGameLoop(net: Net, welcome: WelcomeMsg): () => void {
   const canvas = document.querySelector<HTMLCanvasElement>('#game')!;
   const map = getMap(welcome.mapId) ?? DEFAULT_MAP;
-  const gameScene = new GameScene(canvas, map);
+  let gameScene: GameScene;
+  try {
+    gameScene = new GameScene(canvas, map);
+  } catch {
+    // WebGL 初始化失败（NFR-6 基线外的环境）：可见失败并回大厅，而非黑屏挂起
+    inGame = false;
+    net.close();
+    backToLobby();
+    showNetMsg('net.webglFailed');
+    return () => {};
+  }
   gameScene.setQuality(settings.quality); // 画质分档（FR-L5，M4）
+  activeScene = gameScene; // 供模块级设置面板切换画质
   const minimap = new Minimap(document.querySelector<HTMLCanvasElement>('#minimap')!, map);
   const hud = new Hud();
   const world = new NetWorld(gameScene, map, {
@@ -228,6 +290,8 @@ function runGameLoop(net: Net, welcome: WelcomeMsg): () => void {
       sfx.unlock();
     },
   }, welcome);
+  // 中途加入已结束对局（FR-M1/L7 修复）：服务端经 welcome.matchEnd 补发结算面板
+  if (welcome.matchEnd) world.adoptMatchEnd(welcome.matchEnd);
   const input = new Input(canvas);
   const aim = new THREE.Vector2();
 
@@ -262,51 +326,14 @@ function runGameLoop(net: Net, welcome: WelcomeMsg): () => void {
     inGame = false;
     stopGameLoop?.();
     stopGameLoop = null;
-    net.close(); // 服务端按断线处理（FR-N5：30s 宽限期内重新开始可凭 rejoinId 回原对局）
+    net.sendLeave(); // 服务端立即移除实体（不走 30s 断线宽限，FR-N5/N6）
+    net.close();
+    // 清除重连凭据：主动离开即彻底退出，下次「开始游戏」开新局（意外断线才走 FR-N5 宽限重连）
+    sessionStorage.removeItem(PLAYER_ID_KEY);
     backToLobby();
   };
   document.querySelector('#rematchBtn')!.addEventListener('click', onRematch);
   document.querySelector('#leaveBtn')!.addEventListener('click', onLeave);
-
-  // 设置面板（FR-L5，M4）：Esc 开关，改动即时生效并持久化
-  const settingsEl = document.querySelector<HTMLDivElement>('#settings')!;
-  const volumeSlider = document.querySelector<HTMLInputElement>('#setVolume')!;
-  const bgmSlider = document.querySelector<HTMLInputElement>('#setBgm')!;
-  const qualitySel = document.querySelector<HTMLSelectElement>('#setQuality')!;
-  const langSel = document.querySelector<HTMLSelectElement>('#setLang')!;
-  const syncSettingsUi = (): void => {
-    volumeSlider.value = `${Math.round(settings.volume * 100)}`;
-    bgmSlider.value = `${Math.round(settings.bgm * 100)}`;
-    qualitySel.value = settings.quality;
-    langSel.value = getLang();
-  };
-  syncSettingsUi();
-  const onEsc = (e: KeyboardEvent): void => {
-    if (e.key !== 'Escape') return;
-    syncSettingsUi();
-    settingsEl.classList.toggle('hidden');
-  };
-  window.addEventListener('keydown', onEsc);
-  document.querySelector('#setClose')!.addEventListener('click', () => settingsEl.classList.add('hidden'));
-  volumeSlider.addEventListener('input', () => {
-    settings.volume = Number(volumeSlider.value) / 100;
-    applyAudioSettings(settings);
-    saveSettings(settings);
-  });
-  bgmSlider.addEventListener('input', () => {
-    settings.bgm = Number(bgmSlider.value) / 100;
-    applyAudioSettings(settings);
-    saveSettings(settings);
-  });
-  qualitySel.addEventListener('change', () => {
-    settings.quality = qualitySel.value as GameSettings['quality'];
-    gameScene.setQuality(settings.quality);
-    saveSettings(settings);
-  });
-  langSel.addEventListener('change', () => {
-    setLang(langSel.value as 'zh' | 'en'); // i18n 模块持久化 + applyDom（含小地图外的全部 data-i18n）
-    refreshLangUi(); // 按钮标签/操作提示不走 data-i18n，需手动刷新
-  });
 
   let last = performance.now();
   let inputAcc = 0;
@@ -385,11 +412,11 @@ function runGameLoop(net: Net, welcome: WelcomeMsg): () => void {
   /** 停止循环并释放本局资源（断线/销毁时调用） */
   return () => {
     running = false;
+    activeScene = null;
     input.destroy();
     gameScene.dispose();
     window.removeEventListener('keydown', onTabDown);
     window.removeEventListener('keyup', onTabUp);
-    window.removeEventListener('keydown', onEsc);
     document.querySelector('#rematchBtn')!.removeEventListener('click', onRematch);
     document.querySelector('#leaveBtn')!.removeEventListener('click', onLeave);
   };

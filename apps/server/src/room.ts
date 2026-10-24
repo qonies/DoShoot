@@ -107,8 +107,6 @@ function clampUnit(v: number): number {
 export class Room {
   readonly id: string;
   readonly mapId: string;
-  /** 房间创建时刻 */
-  readonly createdAt = Date.now();
   /** 房间变为空（无真人玩家）的时刻（FR-N6：空房 60s 后回收的计时基准）；null = 非空 */
   emptySince: number | null = null;
   private readonly fighters = new Map<string, SimFighter>();
@@ -119,6 +117,8 @@ export class Room {
   /** 对局起始（模拟时间，FR-M1）与结束标志（FR-M4） */
   private matchStart = 0;
   private matchOver = false;
+  /** 最近一次对局结算事件（FR-M1/L7）：中途加入已结束房间时经 welcome 补发；对局重置时清空 */
+  private lastMatchEnd: Extract<GameEvent, { type: 'matchEnd' }> | null = null;
   /** 步进外产生的事件（如 rematch），随下一次广播捎带 */
   private pendingEvents: GameEvent[] = [];
   /** accumulator 固定步长（FR-N2）：模拟按累积真实时间推进，不受 setInterval 定时器粒度影响 */
@@ -152,6 +152,9 @@ export class Room {
     const nowReal = performance.now();
     let elapsedMs = nowReal - this.lastStepReal;
     this.lastStepReal = nowReal;
+    // 空房（Bot 已清零、等待回收）：无可模拟实体与观众，跳过步进与广播省 CPU；
+    // lastStepReal 照常推进，重新进房时不产生积压追步
+    if (this.fighters.size === 0) return;
     if (elapsedMs > 250) elapsedMs = 250; // 长时间停顿（如进程挂起）后丢弃积压
     this.acc += elapsedMs / 1000;
     const events: GameEvent[] = this.pendingEvents;
@@ -177,12 +180,24 @@ export class Room {
   }
 
   addPlayer(id: string, name: string, progress?: Partial<Record<WeaponId, number>>): void {
+    const wasEmpty = this.playerCount === 0;
     const f = this.createFighter(id, name, false);
     this.applyProgress(f, progress);
     this.fighters.set(id, f);
     this.inputs.set(id, []);
+    // 空房复用（FR-N6 回收等待期 ≤60s / 首名玩家）：重置对局——不把上一场的 matchStart
+    // 倒计时与「已结束」状态残留给新玩家（否则会秒结束 / 无法开火且无结算面板，卡死）
+    if (wasEmpty) this.resetMatch();
     this.adjustBots();
     this.emptySince = null;
+  }
+
+  /** 对局重置（空房复用）：回合计时起点、清除已结束状态与遗留 rematch 事件 */
+  private resetMatch(): void {
+    this.matchOver = false;
+    this.matchStart = this.time;
+    this.lastMatchEnd = null;
+    this.pendingEvents = this.pendingEvents.filter((e) => e.type !== 'matchReset');
   }
 
   removePlayer(id: string): void {
@@ -210,7 +225,8 @@ export class Room {
   }
 
   isDisconnected(id: string): boolean {
-    return this.fighters.get(id)?.disconnectAt !== null && this.fighters.has(id);
+    const f = this.fighters.get(id);
+    return f !== undefined && f.disconnectAt !== null;
   }
 
   /** 断线重连（FR-N5）：宽限期内恢复连接；成功返回 true */
@@ -226,12 +242,15 @@ export class Room {
     if (!this.matchOver) return false;
     this.matchOver = false;
     this.matchStart = this.time;
+    this.lastMatchEnd = null;
     for (const f of this.fighters.values()) {
       f.kills = 0;
       f.deaths = 0;
       f.alive = false;
       f.respawnAt = this.time;
-      f.disconnectAt = null;
+      // 断线宽限中的玩家不恢复在线（disconnectAt 保持）：否则会被「复活」成永久挂机幽灵——
+      // 不被宽限清扫、也无法再凭 rejoinId 回来。其 K/D 照常清零，宽限内重连即以 0 杀
+      // 随新局重生（step 的重生判定不区分断线）；未重连则照常被宽限清扫移除。
     }
     this.pendingEvents.push({ type: 'matchReset' });
     return true;
@@ -280,6 +299,8 @@ export class Room {
       mapId: this.mapId,
       entities: this.snapshotEntities(),
       progress: me ? { ...me.classKills } : undefined,
+      // 中途加入已结束对局（FR-M1/L7 修复）：补发最近一次结算，客户端据此弹出结算面板
+      matchEnd: this.matchOver ? (this.lastMatchEnd ?? undefined) : undefined,
     };
   }
 
@@ -438,7 +459,9 @@ export class Room {
     const standings: StandingRow[] = [...this.fighters.values()]
       .map((f) => ({ id: f.id, name: f.name, bot: f.bot, kills: f.kills, deaths: f.deaths }))
       .sort((a, b) => b.kills - a.kills || a.deaths - b.deaths);
-    events.push({ type: 'matchEnd', reason, standings, killTarget: this.killTarget });
+    const endEvent: GameEvent = { type: 'matchEnd', reason, standings, killTarget: this.killTarget };
+    this.lastMatchEnd = endEvent; // 缓存：供中途加入已结束房间的玩家经 welcome 补发（FR-M1/L7）
+    events.push(endEvent);
   }
 
   /** 快照广播：全量快照 + 事件捎带（频率 = 唤醒频率，落在 SNAPSHOT_RATE_MIN~MAX） */

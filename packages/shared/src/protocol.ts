@@ -3,6 +3,9 @@
 import type { WeaponId } from './weapons';
 
 // ---------- C2S ----------
+// 注：`rematch`（再来一局，FR-M4）与 `leave`（主动离开/返回大厅）为无载荷消息，不定义 interface，
+//     直接 socket.emit('rematch') / socket.emit('leave')。leave 语义（2026-10-24）：
+//     服务端立即移除实体（不走 FR-N5 的 30s 断线宽限），与「意外断线可重连」明确区分。
 
 /** 冲锋枪彩蛋模式口令上报（FR-E1）：客户端在对局中输入 4 位数字 + Enter 后发送，
  *  服务端校验 CHEAT_RUSH_CODE 后授予；仅当局有效 */
@@ -132,6 +135,10 @@ export interface WelcomeMsg {
   entities: EntitySnapshot[];
   /** 本人武器解锁进度基线（FR-W1/A1：客户端据此同步本地 HUD 武器层级名称） */
   progress?: Partial<Record<WeaponId, number>>;
+  /** 对局已结束补发（FR-M1/L7，可选增量字段，协议 v2 前后端互相兼容）：
+   *  中途加入「已结束」的房间时携带最近一次 matchEnd，客户端据此弹出结算面板（可再来一局）；
+   *  新开局 / 空房复用重置后的 welcome 不携带 */
+  matchEnd?: Extract<GameEvent, { type: 'matchEnd' }>;
 }
 
 /** 进房被拒（FR-N7） */

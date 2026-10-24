@@ -3,16 +3,19 @@
 
 import * as THREE from 'three';
 import {
+  INTERP_DELAY,
   MATCH_KILL_TARGET,
   PLAYER_RADIUS,
   PLAYER_SPEED,
   PROTOCOL_VERSION,
   RESPAWN_DELAY,
   WeaponInventory,
+  nextWeaponId,
   resolveCircleWalls,
   resolveShot,
   specForTier,
   tierForKills,
+  type GameEvent,
   type GameMap,
   type InputMsg,
   type SnapshotMsg,
@@ -22,7 +25,7 @@ import {
 } from '@DoShoot/shared';
 import { GameScene } from './scene';
 import { sfx } from './audio';
-import { INTERP_DELAY, LocalPlayer, RemoteEntity } from './entities';
+import { LocalPlayer, RemoteEntity } from './entities';
 import type { InputCommand } from './input';
 
 export interface WorldCallbacks {
@@ -104,6 +107,9 @@ export class NetWorld {
   private wasDead = false;
   private seq = 0;
   private firePressesPending = 0;
+  /** 待上报的切枪意图（数字键直选 / 滚轮折算，FR-W4）：经 buildInput 发送后清空。
+   *  修复：滚轮切枪此前只改本地预测、从不上报服务端，~250ms 后被权威 weaponId 和解「切回」 */
+  private pendingSwitch: WeaponId | null = null;
   /** 已发送但未被服务端确认的输入（快照和解时重放，FR-N4） */
   private pendingInputs: Array<{ seq: number; moveX: number; moveY: number; dt: number }> = [];
   /** 距上次发送输入累计的真实 dt */
@@ -210,9 +216,10 @@ export class NetWorld {
       firing: alive && cmd.firing,
       firePressed: this.firePressesPending,
       reload: alive && cmd.reload,
-      switchTo: alive ? cmd.switchTo : null,
+      switchTo: alive ? this.pendingSwitch : null,
     };
     this.firePressesPending = 0;
+    this.pendingSwitch = null;
     if (alive) {
       // 记录该条输入及其覆盖的 dt，供快照和解重放（FR-N4）
       if (this.pendingInputs.length >= MAX_PENDING_INPUTS) this.pendingInputs.shift();
@@ -298,14 +305,24 @@ export class NetWorld {
     }
   }
 
-  /** 冲锋枪彩蛋模式快照同步（FR-E1）：rush 字段为权威状态，本地预测侧跟随（激活时回调提示一次） */
+  /** 冲锋枪彩蛋模式快照同步（FR-E1）：rush 字段为权威状态，本地预测侧跟随（激活时回调提示一次）。
+   *  本地已折算出待上报切枪（pendingSwitch）时不回授 rush：避免「本地放弃 → 旧快照又授予」的闪烁，
+   *  该切枪很快会被服务端消费并撤销 rush，两端自然对齐 */
   private syncRush(e: SnapshotMsg['entities'][number]): void {
-    if (e.rush === true && !this.inv.rushActive) {
+    if (e.rush === true && !this.inv.rushActive && this.pendingSwitch === null) {
       this.inv.grantRush(this.localTime);
       this.cb.onRushActivated();
     } else if (e.rush !== true && this.inv.rushActive) {
       this.inv.revokeRush();
     }
+  }
+
+  /** 中途加入已结束对局（FR-M1/L7 修复）：服务端经 welcome.matchEnd 补发最近一次结算——
+   *  本地置 matchOver 并弹出结算面板（与 handleEvents 的 matchEnd 分支同语义） */
+  adoptMatchEnd(ev: Extract<GameEvent, { type: 'matchEnd' }>): void {
+    this.matchOver = true;
+    sfx.matchEnd();
+    this.cb.onMatchEnd(ev.reason, ev.standings, ev.killTarget ?? MATCH_KILL_TARGET);
   }
 
   private handleEvents(events: SnapshotMsg['events']): void {
@@ -417,8 +434,12 @@ export class NetWorld {
   }
 
   private handleSwitchAndReload(cmd: InputCommand): void {
-    if (cmd.switchTo !== null) this.inv.switchTo(cmd.switchTo, this.localTime);
-    else if (cmd.wheel !== 0) this.inv.cycle(cmd.wheel > 0 ? 1 : -1, this.localTime);
+    // 切枪意图统一在此折算并暂存：数字键直选，滚轮按 WEAPON_ORDER 环绕折算为目标武器
+    // （shared nextWeaponId，与 WeaponInventory.cycle 同源）。pendingSwitch 持续到下一次
+    // buildInput 上报为止——帧率高于上行 30Hz 时切枪指令不再丢失（FR-W4）。
+    if (cmd.switchTo !== null) this.pendingSwitch = cmd.switchTo;
+    else if (cmd.wheel !== 0) this.pendingSwitch = nextWeaponId(this.inv.current, cmd.wheel > 0 ? 1 : -1);
+    if (this.pendingSwitch !== null) this.inv.switchTo(this.pendingSwitch, this.localTime);
     if (cmd.reload) this.startReloadPredicted();
   }
 }

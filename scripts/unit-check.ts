@@ -1,5 +1,5 @@
-/** shared 纯函数单元自检（零依赖，运行：corepack pnpm unit；退出码 0 = 通过）。
- *  覆盖碰撞/开火解算/武器数值/库存状态机/解锁链——此前这些最核心的逻辑零测试覆盖。 */
+/** shared 纯函数 + 服务端 Room 状态机单元自检（零依赖，运行：corepack pnpm unit；退出码 0 = 通过）。
+ *  覆盖碰撞/开火解算/武器数值/库存状态机/解锁链/滚轮顺序/房间状态机——此前这些最核心的逻辑零测试覆盖。 */
 
 import {
   DEFAULT_MAP,
@@ -10,6 +10,7 @@ import {
   damageAtRange,
   fireIntervalSec,
   isWall,
+  nextWeaponId,
   pickSpawnFarthest,
   rayVsAABB,
   raycastWalls,
@@ -20,6 +21,8 @@ import {
   type AABB,
   type GameMap,
 } from '@DoShoot/shared';
+import { Room } from '../apps/server/src/room';
+import type { Server } from 'socket.io';
 
 let passed = 0;
 const failures: string[] = [];
@@ -217,10 +220,66 @@ ok('isWall 越界视为墙', isWall(map, -1, 5) && isWall(map, 5, 999));
   ok('pickSpawnFarthest 无敌人返回合法出生点', m.spawns.some((s) => s.x === any.x && s.y === any.y));
 }
 
-// ---------- 汇总 ----------
-if (failures.length > 0) {
-  console.error(`[unit] FAIL（${failures.length} 项）:`);
-  for (const f of failures) console.error(`  - ${f}`);
-  process.exit(1);
+// ---------- nextWeaponId（FR-W4 滚轮顺序；环绕与 rush 起点） ----------
+{
+  eq('nextWeaponId pistol+1=smg', nextWeaponId('pistol', 1), 'smg');
+  eq('nextWeaponId lmg+1=pistol（环绕）', nextWeaponId('lmg', 1), 'pistol');
+  eq('nextWeaponId pistol-1=lmg（环绕）', nextWeaponId('pistol', -1), 'lmg');
+  eq('nextWeaponId rush+1=pistol', nextWeaponId('rush', 1), 'pistol');
+  eq('nextWeaponId rush-1=sniper', nextWeaponId('rush', -1), 'sniper');
 }
-console.log(`[unit] OK — ${passed} 项断言全部通过（碰撞/开火解算/数值衰减/库存/解锁链/出生点）`);
+
+// ---------- 汇总（含服务端 Room 状态机的实时等待检查） ----------
+/** Room 状态机检查：空房复用重置 / 已结束房间结算补发 / rematch 不复活断线者。
+ *  用 1s 时限的房间让对局自然结束（killTarget=30 不可能被 Bot 提前触发），三间并行推进。 */
+async function roomChecks(): Promise<void> {
+  // 广播桩：Room 仅需 io.to(roomId).emit，单测不建立真实连接
+  const fakeIo = { to: () => ({ emit: () => {} }) } as unknown as Server;
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+  const reuse = new Room(fakeIo, DEFAULT_MAP, 'unit-reuse', 'normal', 30, 1);
+  const joinOver = new Room(fakeIo, DEFAULT_MAP, 'unit-joinover', 'normal', 30, 1);
+  const reGrp = new Room(fakeIo, DEFAULT_MAP, 'unit-rematch', 'normal', 30, 1);
+  reuse.addPlayer('p0', 'P0');
+  joinOver.addPlayer('a', 'A');
+  reGrp.addPlayer('a', 'A');
+  await sleep(2600); // 1s 时限到期 → matchEnd
+
+  // 1) 时限到期 → welcome 携带最近一次结算（FR-M1/L7）
+  ok('时限到期 → welcome.matchEnd 存在', joinOver.welcome('a').matchEnd !== undefined);
+
+  // 2) 中途加入已结束房间（房内仍有人 → 不重置）→ 补发结算
+  joinOver.addPlayer('b', 'B');
+  ok('加入已结束房间 → welcome.matchEnd 补发', joinOver.welcome('b').matchEnd !== undefined);
+
+  // 3) 空房复用（removePlayer 后再 addPlayer）→ 对局重置，结算不残留
+  reuse.removePlayer('p0');
+  reuse.addPlayer('p1', 'P1');
+  ok('空房复用后对局重置（matchEnd 不残留）', reuse.welcome('p1').matchEnd === undefined);
+
+  // 4) rematch 不复活断线宽限中的玩家（disconnectAt 保持，宽限清扫/rejoin 语义不变）
+  reGrp.markDisconnected('a');
+  ok('rematch 生效', reGrp.rematch());
+  ok('rematch 后对局重置（matchEnd 清空）', reGrp.welcome('a').matchEnd === undefined);
+  ok('断线者保持宽限（不被复活）', reGrp.isDisconnected('a'));
+  ok('宽限内仍可重连', reGrp.tryRejoin('a'));
+
+  reuse.destroy();
+  joinOver.destroy();
+  reGrp.destroy();
+}
+
+async function main(): Promise<void> {
+  await roomChecks();
+  if (failures.length > 0) {
+    console.error(`[unit] FAIL（${failures.length} 项）:`);
+    for (const f of failures) console.error(`  - ${f}`);
+    process.exit(1);
+  }
+  console.log(`[unit] OK — ${passed} 项断言全部通过（碰撞/开火解算/数值衰减/库存/解锁链/出生点/滚轮顺序/房间状态机）`);
+}
+
+main().catch((err) => {
+  console.error('[unit] failed:', err);
+  process.exit(1);
+});

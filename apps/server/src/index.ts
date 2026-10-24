@@ -105,13 +105,12 @@ class RoomManager {
       }
       return this.create(map.id, difficulty, rule);
     }
-    // 快速加入（FR-L4/L7）：优先同规则中人最多的非满房间，其次任意非满房间；均无则随机地图新建
+    // 快速加入（FR-L4/L7）：优先同规则中人最多的非满房间；无则随机地图新建。
+    // 规则不一致的房间不混入（对局生命周期是建房时确定的房间属性，FR-L7「避免不同偏好玩家混房」）
     const openSameRule = this.rooms.filter((r) => sameRule(r) && r.hasCapacity);
     if (openSameRule.length > 0) {
       return openSameRule.reduce((a, b) => (b.playerCount > a.playerCount ? b : a));
     }
-    const open = this.rooms.filter((r) => r.hasCapacity);
-    if (open.length > 0) return open.reduce((a, b) => (b.playerCount > a.playerCount ? b : a));
     const ids = Object.keys(MAPS);
     return this.create(ids[Math.floor(Math.random() * ids.length)]!, difficulty, rule);
   }
@@ -237,6 +236,18 @@ io.on('connection', (socket) => {
     if (!joined) return;
     const s = sessions.get(socket.id);
     if (s) s.room.rematch();
+  });
+
+  // 主动离开（返回大厅）：立即移除实体，不走断线 30s 宽限（FR-N5/N6 语义区分：
+  // 意外断线才保留残影供重连；主动离开即彻底退出，避免残影占位与「再进房被重连回原局」）
+  socket.on('leave', () => {
+    if (!joined) return;
+    const s = sessions.get(socket.id);
+    if (s) {
+      s.room.removePlayer(s.fighterId);
+      sessions.delete(socket.id);
+      socket.leave(s.room.id);
+    }
   });
 
   socket.on('disconnect', (reason) => {

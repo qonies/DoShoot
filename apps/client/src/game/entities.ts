@@ -1,9 +1,8 @@
 /** 网络实体渲染：远端玩家/Bot 快照缓冲插值（FR-N3 ~100ms），本地玩家预测表现（FR-N4） */
 
 import * as THREE from 'three';
-import { INTERP_DELAY, type EntitySnapshot, type WeaponId } from '@DoShoot/shared';
+import type { EntitySnapshot } from '@DoShoot/shared';
 
-export { INTERP_DELAY };
 const BUFFER_TTL = 1.0;
 
 /** 战斗实体网格（玩家与 Bot 共用造型，M1 延续） */
@@ -117,7 +116,6 @@ export class LocalPlayer {
   hp = 100;
   alive = true;
   kills = 0;
-  weaponId: WeaponId = 'pistol';
   /** 死亡时刻（本地渲染时钟），用于重生倒计时 */
   deathAt: number | null = null;
 

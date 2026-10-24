@@ -23,6 +23,7 @@
 ## 仓库与凭据（2026-10-18）
 - GitHub：`qonies/DoShoot`（**public**，2026-10-18 由 private 改为 public），remote origin 已配置，主分支 main
 - Release：**v0.3.1 已发布**（tag v0.3.1 + release notes，无构建产物 assets，内容覆盖 M3 系统完整 + M4 打磨完善）；历史 v0.2.5
+- **版本同步（2026-10-24）**：根与三个子包 package.json 同步至 **0.3.4**（此前停在 0.3.1，需求文档已演进至 v0.3.4）；v0.3.2~v0.3.4 尚未发布 GitHub Release
 - **开源协议：MIT**（2026-10-18 落地：根 LICENSE 文件 + 根 package.json `license: MIT` + README 协议章节与徽章；commit 269c9d9 已推送）
 - **GitHub 简介**（gh repo edit 已设置；2026-10-21 移除对标字眼）：浏览器多人在线俯视角射击游戏：TypeScript + Three.js + Socket.IO 权威服务端，快照插值/预测与和解/延迟补偿，武器解锁、Bot AI、中英双语。MIT 开源。另附 topics：game/multiplayer/threejs/socketio/typescript/websocket/shooter
 - 凭据助手配置在**仓库本地**：`git config credential.helper "!gh auth git-credential"`（gh CLI 已登录 qonies；本机 HOME 指向自定义目录导致 gh 无法写全局 .gitconfig，故用仓库级配置）
@@ -30,8 +31,9 @@
 ## 环境与命令（2026-10-18 实测可用）
 - Windows + PowerShell；Node v24.13.0；pnpm 经 corepack 调用：`corepack pnpm <cmd>`（pnpm 不在 PATH）
 - **网络协议 v2（M3）**：JoinMsg+mapId/difficulty/rejoinId/progress；EntitySnapshot+deaths；Snapshot+matchTimeLeft；WelcomeMsg+mapId/progress；事件含 unlock/matchEnd/matchReset——前后端经 PROTOCOL_VERSION 强校验，不匹配拒绝进房
+- **协议 v2 增量（v0.3.4，2026-10-24）**：`WelcomeMsg.matchEnd?`（中途加入已结束房间补发最近一次结算）+ C2S `leave`（主动离开立即移除实体，不走断线宽限）；`PROTOCOL_VERSION` 保持 2，前后端互相兼容
 - **M4 延迟补偿**：ping/pong RTT 测量 + `InputMsg.pingMs`（增量可选字段，v2 前后端互相兼容）；服务端 ~1s 位置历史回溯命中（shared 常量 INTERP_DELAY/LAG_COMP_HISTORY/LAG_COMP_MAX_REWIND）
-- 客户端构建 gzip ≈ 149KB（M4 含小地图/设置/BGM；M3 147KB、M2 143KB）
+- 客户端构建 gzip ≈ 150KB（v0.3.4；M4 148.9KB、M3 147KB、M2 143KB）
 - 根目录脚本已内置 `corepack pnpm` 前缀，可直接使用：
   - `corepack pnpm dev:client` → http://localhost:5173
   - `corepack pnpm dev:server` → http://localhost:3000

@@ -1,7 +1,17 @@
 # 活动上下文（Active Context）
 
 ## 当前焦点
-**FR-L7 对局生命周期选择已落地（2026-10-23，协议仍 v2 增量兼容）+ FR-E1 冲锋枪彩蛋模式** — 待用户局域网实测验收；此前 M4 体检修复的浏览器专项回归仍待验证（进局→返回大厅→再进局渲染等）。
+**v0.3.4 体检修复批次 2 已落地（2026-10-24）**：滚轮切枪同步服务端 / 空房复用与「加入已结束房间」修复 / C2S `leave` 主动离开语义 / rematch 不复活断线者，另修 6 项 P2/P3——待局域网多设备实测验收。
+
+## 最近变更（2026-10-24 · v0.3.4 体检修复批次 2）
+- **P1 滚轮切枪从不同步服务端（已修复）**：`world.ts` 的 buildInput 只上报数字键的 switchTo，滚轮仅本地 `inv.cycle` → ~250ms 后被权威 weaponId 和解「切回」（rush 模式还会出现授予/撤销闪烁）。shared 新增 `nextWeaponId(current, delta)`（`WeaponInventory.cycle` 同源复用），`handleSwitchAndReload` 把滚轮/数字键统一折算为 `pendingSwitch` 持有至下次 buildInput 上报（顺带修复帧率高于上行 30Hz 时切枪指令丢失）；`syncRush` 在 pendingSwitch 非空时不回授 rush
+- **P1 加入「已结束 / 复用空房」卡死（已修复）**：`addPlayer` 原本不重置 matchOver/matchStart，而 `pick` 会复用空房（回收等待期 ≤60s）或未满的已结束房间 → 新玩家无法开火、无倒计时、收不到 matchEnd 且无任何出口（只能刷新）。`Room.resetMatch()`（空房复用时调用）+ `endMatch` 缓存 `lastMatchEnd` + `WelcomeMsg.matchEnd?`（可选增量字段，v2 兼容）→ 中途加入已结束房间的玩家弹出结算面板可再来一局；客户端 `NetWorld.adoptMatchEnd` 承接
+- **P1 主动「返回大厅」30s 内再进房回到原对局（已修复）**：新增 C2S `leave`（无载荷），服务端立即 `removePlayer`（不走 FR-N5 宽限）；`main.ts onLeave` 发 leave + 清 sessionStorage `DoShoot.playerId`——语义定为「意外断线才宽限重连，主动离开即彻底退出」
+- **P1 rematch 复活断线者为永久幽灵（已修复）**：`rematch()` 移除 `f.disconnectAt = null`——宽限中玩家保持断线（可被清扫/可 rejoin），K/D 照常清零，重连即以 0 杀随新局重生
+- **P2/P3**：`RoomManager.pick` 移除「任意非满房」回退（快速加入不混规则，对齐 FR-L7）；`input.ts` 设置/结算面板打开期间屏蔽键盘（keyup 放行清键）；设置面板监听器提升到 main.ts 模块级一次性绑定（`activeScene` 引用当前场景，修复重复进局叠加监听器 + 旧 scene 闭包泄漏）；onWelcome 校验 `welcome.version`（FR-N7 防御）；`runFrame` 空房（fighters 为空）跳过步进与广播；GameScene 构造 try/catch → `net.webglFailed`（i18n 新增 1 键，76 键）；删除死代码 Room.createdAt / LocalPlayer.weaponId / entities 的 INTERP_DELAY 重复导出；`isDisconnected` 改显式判空
+- **协议**：仍 v2；增量 `WelcomeMsg.matchEnd?` + C2S `leave`（均向后兼容）
+- **测试**：`unit` 86→98 项（+`nextWeaponId` 5 项 + Room 状态机 9 项：空房复用重置 / 已结束房间补发结算 / rematch 不复活断线者，1s 时限房间实时推进）；`smoke:net` 新增 7b 步（leave 立即停快照 + 旧 rejoinId 进房为新实体）
+- 验证：`unit` 98 全过 / `typecheck` 全过 / `check:i18n` OK（76 键）/ `smoke:net` ALL PASS / `build` 成功（gzip 150.3KB）
 
 ## 最近变更（2026-10-23 · FR-L7 对局生命周期选择）
 - **玩法**：大厅新增「击杀目标」（30/50/100 杀）+「对局时限」（5/8/10 分钟）两个下拉框（`#killTarget`/`#timeLimit`），先到即结束（FR-M1 语义不变），默认 30 杀 / 5 分钟 = 原行为
@@ -122,10 +132,9 @@
 - M1 单机战斗核心完成：shared 武器数值表、客户端战斗层（fighter/weapons/combat/bot/world/hud）、HP/死亡/重生、完整 HUD、基础 Bot；FR-W4 M1 约定（携带全部 6 类）已升 v0.2.3
 
 ## 下一步
-1. 局域网多设备实测验收（M4 验收项）：60 FPS、双机开黑、平衡性反馈与数值调参
-2. 浏览器专项回归（本次体检修复的验证项）：进局→返回大厅→再进局渲染（forceContextLoss 移除后）、设置/结算面板点击不开枪、对局中切语言、地图「随机」项
-3. 待确认增强（未做）：Bot 切枪与全自动武器开火支持（当前 Bot 恒用手枪；若做需同时改 `bot.ts` 的 `f.input.firing`）
-4. V2（TDM/Hardpoint、账号与战绩、反作弊加固、更多地图武器，见需求 §1.2）
+1. 局域网多设备实测验收（M4 + v0.3.4 验收项）：60 FPS、双机开黑、平衡性反馈与数值调参；专项回归：滚轮切枪（含 rush 模式中放弃）、打完一局后「返回大厅」→ 新开一局、结算弹出期间新玩家加入可见结算面板、设置/结算面板打开期间按键无响应、断线 30s 内重连回原局
+2. 待确认增强（未做）：Bot 切枪与全自动武器开火支持（当前 Bot 恒用手枪；若做需同时改 `bot.ts` 的 `f.input.firing`）
+3. V2（TDM/Hardpoint、账号与战绩、反作弊加固、更多地图武器，见需求 §1.2）；rejoinId 冒名接管与玩家间碰撞已记入 V2/决策待定
 
 ## 重要决策记录
 - 2026-10-17：渲染路线用户拍板选 Three.js（非 Canvas 2D）。
