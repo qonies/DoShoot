@@ -36,10 +36,20 @@
 
 - [x] **体检修复批次 2（2026-10-24，v0.3.4）**：P1 滚轮切枪同步服务端（shared `nextWeaponId` + `pendingSwitch` 上报，rush 放弃闪烁消除）/ P1 加入已结束或复用空房卡死（`Room.resetMatch` + `WelcomeMsg.matchEnd?` 补发结算）/ P1 主动离开语义（C2S `leave` 立即移除 + 清 sessionStorage 重连凭据）/ P1 rematch 不复活断线者；P2 快速加入不混规则房间、面板打开屏蔽键盘、设置监听器模块级一次性绑定、welcome 版本校验、空房跳过模拟与广播；P3 WebGL 失败可见报错、死代码清理。协议仍 v2（增量 `WelcomeMsg.matchEnd?` + C2S `leave`）。单测 86→98 项；smoke:net 新增 leave 回归断言。验证：unit 98 / typecheck / check:i18n（76 键）/ smoke:net / build（gzip 150.3KB）全过
 
+- [x] **等待房间与房间号落地（2026-10-29，v0.3.5）**：「新建游戏」→ 等待开局界面（4 位房间号、房主可调地图/Bot 难度/击杀目标/时限/Bot 数量），大厅房间号输入「加入房间」，房主「开始游戏」全员进对局（服务端重发 welcome 复用进局链路）；等待态不步进不广播、Bot 开局按量加入、等待态断线即移除、房主离开移交；协议 v2→**v3**（C2S createRoom/updateRoom/startMatch + S2C roomUpdate + JoinMsg.roomCode?/WelcomeMsg.room?/noRoom）。单测 98→122 项、smoke:net 新增 5 步。验证：unit 122 / typecheck / check:i18n（93 键）/ smoke:net / smoke:server（protocol v3）/ build（gzip 152.1KB）/ loadtest 全过
+
+- [x] **头顶血条（2026-10-29，v0.3.9）**：每个玩家/Bot 头顶悬浮实时血板——本地=预测血量（每帧 sync）、远端/Bot=快照血量（~28Hz applySnapshot）；Three.js 双板实现（底板+左端锚定填充板 `scale.x=hp%`，俯仰角匹配俯视相机正对视角）；血量分段变色（>55 绿/26~55 橙/≤25 红）、死亡隐藏、变化时才改写、实体消失深度释放；悬浮高度 1.8（反馈：1.45 压角色，且高于墙顶→掩体后血板浮现墙顶上方）；**倒计时移右上角**（反馈：原顶部中央与击杀数/血板重叠；触屏端左移避让设置按钮，击杀流下移）。服务端与协议零改动。验证：typecheck / unit 145 / check:i18n / smoke:net / build（gzip 155.76KB）全过；视觉效果待浏览器实测
+
+- [x] **触屏双操作模式（2026-10-29，v0.3.8）**：新增 **pad 模式（默认）**——左下 D-pad 四向键（多点触控、相邻同按=斜向）+ 点击/按住屏幕瞄准射击（screenToGround 世界点投影，轻点 1 发/按住连发/拖动微调，无开火键）；原双摇杆保留为可选（stick），设置面板「操作模式」下拉 + 局内热切换（销毁重建控制器）；**iOS 手势加固修「双指误缩放」**（`user-scalable=no` iOS 被忽略是根因 → `body.in-game #game` touch-action:none + window 层双指/gesture 拦截，单指面板滚动不受影响）；`TouchController` 统一契约 + `gestures.ts` + `touchmath` 新增 `dpadVector`/`clientToNdc`；HUD 避让（pad：血条底部中央/动作键右缘竖排）；服务端与协议零改动。单测 132→145、i18n 98→106 键。验证：typecheck / unit / check:i18n / smoke:net / build（gzip 155.37KB）全过；**iOS 真机实测待验收**（双指不缩放、D-pad 手感、点击射击）
+
+- [x] **体检修复批次 3（2026-10-29，v0.3.7）**：P1 smoke:net 彩蛋断言假失败修复（新增不感知死亡 `waitFor`，替代 `waitForAlive` 的「先活后死」误判，实测 3 跑 1 败）；P1 触屏小屏适配——`#settings/#settlement` 面板纳入小屏媒体查询（限宽限高可滚动）+ 设置面板遮罩点击关闭 + 面板打开期间 `body.ui-open` 隐藏触屏按钮（层级压面板问题）；P2 `newCode()` 兜底改确定性 4 位扫描接入 `ROOM_CODE_LENGTH`（原 5 位兜底号无法加入）、`requestRush` running 态守卫（防等待房间提前激活彩蛋）、显式 `roomCode` 优先于 `rejoinId`；P3 rush 防闪烁改服务端确认窗口（`switchAckPending` 1s）、重复 welcome 先停旧对局循环、右摇杆旋钮钳制、`isTouchDevice` 收紧（触屏笔记本不误判）、`#roomCode` maxlength 放宽、计分板帧判读走 getter；测试体系重构——`RoomManager`+`sanitize*` 抽出至 `apps/server/src/rooms.ts`，index.ts 与 net-smoke.ts 同源复用（消除冒烟「同语义子集」漂移盲区）。单测 130→132；验证 typecheck / unit / check:i18n / smoke:net×3（真实 RoomManager）/ smoke:server / build（gzip 154.07KB）全过
+
+- [x] **触屏操作适配落地（2026-10-29，v0.3.6）**：iPad/iPhone 浏览器（iOS Safari ≥15）双虚拟摇杆（左移动/右瞄准，方向松手保持）+ 开火/换弹/切枪/设置按钮 + 安全区适配；仅响应 pointerType==='touch'（桌面零影响）；`(pointer: coarse)` 判定兼容 iPadOS 桌面模式；stickVector 纯函数单测；触屏瞄准 = 玩家位置+方向×8、准星 worldToScreen 投影；viewport 禁缩放/viewport-fit=cover/touch-action:none/100dvh/禁捏合；小屏媒体查询（大厅/等待面板可滚动）；服务端与协议零改动。单测 122→130 项。验证：unit 130 / typecheck / check:i18n（98 键）/ smoke:net / smoke:server / build（gzip 153.9KB）全过；**iOS Safari 真机实测待验收**
+
 ## 未开始
 - [ ] **局域网多设备实测验收（M4 验收项）**：60 FPS 实测、双机开黑体验、平衡性反馈与数值调参
 - [ ] **V2**（TDM/Hardpoint、账号与战绩、反作弊加固、更多地图武器，见需求 §1.2）
 
 ## 当前状态
-**v0.3.4 体检修复批次 2 已落地**：完整可玩 FFA + 可配置对局生命周期（击杀目标/时限）+ 延迟补偿/小地图/设置界面/音频增强/压测与部署文档 + 冲锋枪彩蛋 + 滚轮切枪/对局复用/主动离开/重连语义修复；协议 v2 增量兼容（`WelcomeMsg.matchEnd?` + C2S `leave`）。待局域网多设备实测验收（重点：滚轮切枪实际手感、打完一局后离开→新开一局、结算期间新玩家加入、面板期间按键无响应、断线 30s 内重连回原局）。
+**v0.3.8 触屏双操作模式已落地**（pad 默认：D-pad+点击射击；stick 可选：双摇杆；iOS 双指误缩放手势修复）：完整可玩 FFA + 等待房间（FR-L8）+ 触屏双模式（FR-U6）+ 可配置对局生命周期 + 延迟补偿/小地图/设置界面/音频增强/压测与部署文档 + 冲锋枪彩蛋 + 滚轮切枪/对局复用/主动离开/重连语义修复；协议 v3。待局域网多设备实测验收（重点：**iOS Safari 真机**——双指不缩放、pad 模式 D-pad 手感与点击射击、stick 回退、模式热切换、面板滚动、桌面端回归）。
 

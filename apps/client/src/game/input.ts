@@ -80,8 +80,9 @@ export class Input {
     return e.target instanceof Element && e.target.closest('#settings, #settlement') !== null;
   }
 
-  /** 设置/结算面板是否处于打开状态（键盘输入屏蔽判据，与 isUiTarget 的鼠标判据配套） */
-  private static isGameInputBlocked(): boolean {
+  /** 设置/结算面板是否处于打开状态（键盘输入屏蔽判据，与 isUiTarget 的鼠标判据配套）。
+   *  public：触屏层（touch.ts）按钮/摇杆复用同一判据，面板打开期间不产生游戏输入 */
+  public static isGameInputBlocked(): boolean {
     return (
       document.querySelector('#settings')?.classList.contains('hidden') === false ||
       document.querySelector('#settlement')?.classList.contains('hidden') === false

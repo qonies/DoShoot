@@ -1,9 +1,74 @@
-/** 网络实体渲染：远端玩家/Bot 快照缓冲插值（FR-N3 ~100ms），本地玩家预测表现（FR-N4） */
+/** 网络实体渲染：远端玩家/Bot 快照缓冲插值（FR-N3 ~100ms），本地玩家预测表现（FR-N4）
+ *  + 头顶血条（FR-C3/U1，v0.3.9）：每个玩家/Bot 头顶悬浮实时血板（本地=预测血量，远端=快照血量） */
 
 import * as THREE from 'three';
+import { PLAYER_HP } from '@DoShoot/shared';
 import type { EntitySnapshot } from '@DoShoot/shared';
 
 const BUFFER_TTL = 1.0;
+
+// ---------- 头顶血条（FR-C3/U1，v0.3.9） ----------
+
+const HP_BAR_BG_W = 1.1;
+const HP_BAR_BG_H = 0.16;
+const HP_BAR_FILL_W = 1.02;
+const HP_BAR_FILL_H = 0.1;
+/** 悬浮高度：明显高于身体胶囊顶部（~1.32），不遮挡玩家角色；
+ *  也高于墙高（1.6）→ 掩体后玩家的血板会浮现在墙顶上方（顶视角射击游戏惯例） */
+const HP_BAR_Y = 1.8;
+/** 血板朝向与 GameScene 相机俯视角匹配（相机 position.y=22 / z 偏移 12），正对相机 */
+const HP_BAR_TILT = -Math.atan2(22, 12);
+/** 血量分段颜色：低 / 中 / 高 */
+const HP_BAR_COLORS: readonly number[] = [0xe57373, 0xffb74d, 0x4caf50];
+
+interface HealthBar {
+  group: THREE.Group;
+  fill: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
+  bg: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
+  /** 上次血量比例（避免每快照/每帧重写 scale） */
+  width: number;
+  /** 上次颜色分段（-1 = 未初始化） */
+  bucket: number;
+}
+
+function createHealthBar(): HealthBar {
+  const group = new THREE.Group();
+  group.rotation.x = HP_BAR_TILT;
+  const bg = new THREE.Mesh(
+    new THREE.PlaneGeometry(HP_BAR_BG_W, HP_BAR_BG_H),
+    new THREE.MeshBasicMaterial({ color: 0x10151b }),
+  );
+  const fillGeo = new THREE.PlaneGeometry(HP_BAR_FILL_W, HP_BAR_FILL_H);
+  fillGeo.translate(HP_BAR_FILL_W / 2, 0, 0); // 左端锚定：scale.x = 血量比例
+  const fill = new THREE.Mesh(fillGeo, new THREE.MeshBasicMaterial({ color: HP_BAR_COLORS[2]! }));
+  fill.position.set(-HP_BAR_FILL_W / 2, 0, 0.001); // 沿法线抬高，避免与底板 z-fighting
+  group.add(bg, fill);
+  group.visible = false;
+  return { group, fill, bg, width: -1, bucket: -1 };
+}
+
+/** 血条刷新：宽度/颜色仅在变化时更新（远端 ~28Hz 快照、本地每帧 sync 调用） */
+function syncHealthBar(bar: HealthBar, hp: number, alive: boolean): void {
+  const pct = Math.max(0, Math.min(1, hp / PLAYER_HP));
+  bar.group.visible = alive && pct > 0;
+  if (Math.abs(pct - bar.width) > 0.004) {
+    bar.width = pct;
+    bar.fill.scale.x = Math.max(pct, 0.0001); // 0 缩放会退化矩阵，钳到极小值
+  }
+  const bucket = hp > 55 ? 2 : hp > 25 ? 1 : 0;
+  if (bucket !== bar.bucket) {
+    bar.bucket = bucket;
+    bar.fill.material.color.setHex(HP_BAR_COLORS[bucket]!);
+  }
+}
+
+function disposeHealthBar(bar: HealthBar, scene: THREE.Scene): void {
+  scene.remove(bar.group);
+  bar.bg.geometry.dispose();
+  bar.bg.material.dispose();
+  bar.fill.geometry.dispose();
+  bar.fill.material.dispose();
+}
 
 /** 战斗实体网格（玩家与 Bot 共用造型，M1 延续） */
 export function createFighterMesh(color: number): THREE.Group {
@@ -50,7 +115,10 @@ export class RemoteEntity {
   bot: boolean;
   alive = true;
   kills = 0;
+  /** 最新快照血量（头顶血条用，FR-C3/U1） */
+  hp = PLAYER_HP;
   private buffer: Snap[] = [];
+  private readonly hpBar: HealthBar;
 
   constructor(scene: THREE.Scene, s: EntitySnapshot, serverTime: number) {
     this.id = s.id;
@@ -58,12 +126,16 @@ export class RemoteEntity {
     this.bot = s.bot;
     this.group = createFighterMesh(colorForEntity(s.id, s.bot));
     scene.add(this.group);
+    this.hpBar = createHealthBar();
+    scene.add(this.hpBar.group);
     this.applySnapshot(s, serverTime);
   }
 
   applySnapshot(s: EntitySnapshot, serverTime: number): void {
     this.alive = s.alive;
     this.kills = s.kills;
+    this.hp = s.hp;
+    syncHealthBar(this.hpBar, s.hp, s.alive); // 头顶血条（FR-C3/U1）：随快照血量刷新
     this.buffer.push({ t: serverTime, x: s.x, y: s.y, angle: s.angle });
   }
 
@@ -73,20 +145,27 @@ export class RemoteEntity {
     // 清理过期缓冲
     while (b.length > 2 && b[0]!.t < renderTime - BUFFER_TTL) b.shift();
     this.group.visible = this.alive;
+    this.hpBar.group.visible = this.alive;
     if (!this.alive || b.length === 0) return;
+    let px: number;
+    let pz: number;
     if (b.length === 1) {
-      this.group.position.set(b[0]!.x, 0, b[0]!.y);
+      px = b[0]!.x;
+      pz = b[0]!.y;
       this.group.rotation.y = b[0]!.angle;
-      return;
+    } else {
+      let i = b.length - 2;
+      while (i > 0 && b[i]!.t > renderTime) i--;
+      const a = b[i]!;
+      const c = b[i + 1]!;
+      const span = c.t - a.t;
+      const f = span > 1e-6 ? Math.min(1, Math.max(0, (renderTime - a.t) / span)) : 1;
+      px = a.x + (c.x - a.x) * f;
+      pz = a.y + (c.y - a.y) * f;
+      this.group.rotation.y = a.angle + shortAngle(a.angle, c.angle) * f;
     }
-    let i = b.length - 2;
-    while (i > 0 && b[i]!.t > renderTime) i--;
-    const a = b[i]!;
-    const c = b[i + 1]!;
-    const span = c.t - a.t;
-    const f = span > 1e-6 ? Math.min(1, Math.max(0, (renderTime - a.t) / span)) : 1;
-    this.group.position.set(a.x + (c.x - a.x) * f, 0, a.y + (c.y - a.y) * f);
-    this.group.rotation.y = a.angle + shortAngle(a.angle, c.angle) * f;
+    this.group.position.set(px, 0, pz);
+    this.hpBar.group.position.set(px, HP_BAR_Y, pz);
   }
 
   dispose(scene: THREE.Scene): void {
@@ -97,6 +176,7 @@ export class RemoteEntity {
         (o.material as THREE.Material).dispose();
       }
     });
+    disposeHealthBar(this.hpBar, scene);
   }
 }
 
@@ -107,9 +187,10 @@ function shortAngle(a: number, b: number): number {
   return d;
 }
 
-/** 本地玩家：客户端预测状态 + 表现网格 */
+/** 本地玩家：客户端预测状态 + 表现网格 + 头顶血条（FR-C3/U1） */
 export class LocalPlayer {
   readonly group: THREE.Group;
+  private readonly hpBar: HealthBar;
   x: number;
   y: number;
   angle = 0;
@@ -124,6 +205,8 @@ export class LocalPlayer {
     this.y = y;
     this.group = createFighterMesh(0x4fc3f7);
     scene.add(this.group);
+    this.hpBar = createHealthBar();
+    scene.add(this.hpBar.group);
     this.sync();
   }
 
@@ -131,5 +214,8 @@ export class LocalPlayer {
     this.group.visible = this.alive;
     this.group.position.set(this.x, 0, this.y);
     this.group.rotation.y = this.angle;
+    // 头顶血条（FR-C3/U1）：位置随预测位置每帧更新；宽度/颜色仅在变化时改写
+    this.hpBar.group.position.set(this.x, HP_BAR_Y, this.y);
+    syncHealthBar(this.hpBar, this.hp, this.alive);
   }
 }

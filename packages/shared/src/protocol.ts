@@ -1,5 +1,8 @@
-/** 网络协议消息定义（M2 落地；集中定义于 shared，见 systemPatterns「协议」与 FR-N2/N7） */
+/** 网络协议消息定义（M2 落地；集中定义于 shared，见 systemPatterns「协议」与 FR-N2/N7。
+ *  v3（FR-L8 等待房间）：新增 C2S createRoom/updateRoom/startMatch、S2C roomUpdate，
+ *  JoinMsg 增量 roomCode?，WelcomeMsg 增量 room?，JoinRejectReason 增量 'noRoom'） */
 
+import type { BotDifficulty } from './constants';
 import type { WeaponId } from './weapons';
 
 // ---------- C2S ----------
@@ -13,12 +16,34 @@ export interface RushModeMsg {
   code: string;
 }
 
-/** 进房请求（FR-N7：版本不匹配拒绝进入；M3 扩展：地图/难度选择、断线重连、武器进度上报） */
+/** 新建游戏（FR-L8 等待房间房主）：建房进入「等待开局」态并分配房间号，
+ *  房主可在等待界面调整参数（updateRoom），人齐后 startMatch 开局 */
+export interface CreateRoomMsg {
+  version: number;
+  nickname: string;
+  /** 期望地图 id（MAPS 键）；缺省/非法 = 随机地图 */
+  mapId?: string;
+  /** Bot 难度（FR-B3；缺省 = normal） */
+  difficulty?: BotDifficulty;
+  /** 武器解锁进度上报（FR-A1） */
+  progress?: Partial<Record<WeaponId, number>>;
+  /** 对局生命周期（FR-L7）：击杀目标（缺省/非法 = MATCH_KILL_TARGET） */
+  killTarget?: number;
+  /** 对局时限秒（FR-L7；缺省/非法 = MATCH_TIME_LIMIT） */
+  timeLimitSec?: number;
+  /** 房内 Bot 数量（FR-L8，BOT_COUNT_OPTIONS 之一；缺省/非法 = BOT_COUNT_DEFAULT） */
+  botCount?: number;
+}
+
+/** 房间号加入（FR-L8）：JoinMsg 增量可选字段 */
 export interface JoinMsg {
   version: number;
   nickname: string;
   /** 期望地图 id（MAPS 键）；缺省/非法 = 快速加入（FR-L4，服务端分配人最多的非满房间） */
   mapId?: string;
+  /** 房间号（FR-L8，4 位数字，normalizeRoomCode 规范化）：存在则按号进房（等待态或对局中均可），
+   *  缺省 = 快速加入；非法/不存在 → joinRejected 'noRoom' */
+  roomCode?: string;
   /** Bot 难度（FR-B3，仅影响新创建房间的 Bot；缺省 = normal） */
   difficulty?: 'easy' | 'normal' | 'hard';
   /** 断线重连（FR-N5）：上次对局的 playerId，30s 宽限内可回原状态；不可重连时按新进房处理 */
@@ -29,10 +54,49 @@ export interface JoinMsg {
   killTarget?: number;
   /** 对局时限秒（TIME_LIMIT_OPTIONS 之一；缺省/非法 = MATCH_TIME_LIMIT）。先到击杀目标或时限即结束 */
   timeLimitSec?: number;
+  /** 房内 Bot 数量（FR-L8，BOT_COUNT_OPTIONS 之一；缺省/非法 = BOT_COUNT_DEFAULT，仅影响新建房间） */
+  botCount?: number;
 }
 
 /** 进房被拒原因 */
-export type JoinRejectReason = 'version' | 'full';
+export type JoinRejectReason = 'version' | 'full' | 'noRoom';
+
+/** 房主在等待界面调整房间参数（FR-L8，C2S 'updateRoom'）：仅房主且等待态生效；
+ *  只携带要修改的字段，全部字段经服务端白名单校验 */
+export interface RoomSettingsMsg {
+  mapId?: string;
+  difficulty?: BotDifficulty;
+  killTarget?: number;
+  timeLimitSec?: number;
+  botCount?: number;
+}
+
+/** 房间状态（FR-L8）：waiting = 等待开局（房主可调参数）；running = 对局中 */
+export type RoomState = 'waiting' | 'running';
+
+/** 等待界面玩家行（FR-L8） */
+export interface RoomPlayerInfo {
+  id: string;
+  name: string;
+  host: boolean;
+}
+
+/** 房间信息（FR-L8）：S2C 'roomUpdate' 载荷 + WelcomeMsg.room 增量字段；
+ *  等待态任何变化（加入/离开/改参数/换房主/开局）都会广播 */
+export interface RoomInfoMsg {
+  /** 房间号（4 位数字） */
+  code: string;
+  hostId: string;
+  state: RoomState;
+  mapId: string;
+  difficulty: BotDifficulty;
+  killTarget: number;
+  timeLimitSec: number;
+  botCount: number;
+  /** 房间人数上限（ROOM_CAPACITY） */
+  capacity: number;
+  players: RoomPlayerInfo[];
+}
 
 /** 玩家输入意图（FR-N1：客户端输入仅作为意图上报；客户端 ~30Hz 发送） */
 export interface InputMsg {
@@ -139,6 +203,9 @@ export interface WelcomeMsg {
    *  中途加入「已结束」的房间时携带最近一次 matchEnd，客户端据此弹出结算面板（可再来一局）；
    *  新开局 / 空房复用重置后的 welcome 不携带 */
   matchEnd?: Extract<GameEvent, { type: 'matchEnd' }>;
+  /** 房间信息（FR-L8，v3 增量可选字段）：客户端据此进入等待界面（state=waiting）
+   *  或直接进对局（state=running）；开局时服务端重发 welcome（state=running）驱动等待→对局切换 */
+  room?: RoomInfoMsg;
 }
 
 /** 进房被拒（FR-N7） */

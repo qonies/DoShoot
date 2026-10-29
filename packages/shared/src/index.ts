@@ -1,4 +1,5 @@
 export * from './constants';
+export * from './roomCode';
 export * from './weapons';
 export * from './inventory';
 export * from './combat';

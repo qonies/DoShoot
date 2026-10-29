@@ -2,7 +2,11 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- 触屏适配（FR-U6）：禁缩放防误触双击、viewport-fit=cover 暴露刘海安全区 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>DoShoot</title>
   </head>
   <body>
@@ -81,6 +85,14 @@
               <option value="en">English</option>
             </select>
           </label>
+          <!-- 触屏操作模式（FR-U6 双模式，v0.3.8）：仅触屏设备显示（CSS body:not(.touch) 隐藏） -->
+          <label id="touchModeRow">
+            <span data-i18n="set.touchMode"></span>
+            <select id="setTouchMode">
+              <option value="pad" data-i18n="touch.modePad"></option>
+              <option value="stick" data-i18n="touch.modeStick"></option>
+            </select>
+          </label>
           <button id="setClose" data-i18n="set.close"></button>
         </div>
       </div>
@@ -134,11 +146,60 @@
             <option value="600" data-i18n="rule.time10"></option>
           </select>
         </label>
+        <label>
+          <span data-i18n="roomCode"></span>
+          <input id="roomCode" maxlength="7" inputmode="numeric" autocomplete="off" placeholder="0000" />
+        </label>
         <div class="buttons">
           <button id="quickJoin" data-i18n="quickJoin"></button>
-          <button id="start" class="primary" data-i18n="start"></button>
+          <button id="start" class="primary" data-i18n="createRoom"></button>
+        </div>
+        <div class="buttons">
+          <button id="joinRoom" data-i18n="joinRoom"></button>
         </div>
         <button id="langBtn" class="lang"></button>
+      </div>
+    </div>
+
+    <!-- 等待房间（FR-L8）：新建游戏后等待局域网玩家加入；房主可调参数、开局/离开 -->
+    <div id="waitroom" class="hidden">
+      <div class="panel">
+        <h2 data-i18n="wait.title"></h2>
+        <div class="codebox">
+          <span class="codelabel" data-i18n="wait.code"></span>
+          <b id="waitCode">----</b>
+        </div>
+        <div id="waitShare" class="shareHint"></div>
+        <div class="waitMeta">
+          <span data-i18n="wait.players"></span>
+          <b id="waitCount">1 / 10</b>
+        </div>
+        <div id="waitPlayers"></div>
+        <label>
+          <span data-i18n="map"></span>
+          <select id="waitMap"></select>
+        </label>
+        <label>
+          <span data-i18n="difficulty"></span>
+          <select id="waitDifficulty"></select>
+        </label>
+        <label>
+          <span data-i18n="killTarget"></span>
+          <select id="waitKillTarget"></select>
+        </label>
+        <label>
+          <span data-i18n="timeLimit"></span>
+          <select id="waitTimeLimit"></select>
+        </label>
+        <label>
+          <span data-i18n="botCount"></span>
+          <select id="waitBotCount"></select>
+        </label>
+        <div id="waitHostHint" class="shareHint hidden" data-i18n="wait.readonly"></div>
+        <div class="buttons">
+          <button id="waitLeave" data-i18n="wait.leave"></button>
+          <button id="waitStart" class="primary" data-i18n="wait.start"></button>
+        </div>
       </div>
     </div>
 

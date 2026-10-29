@@ -7,35 +7,19 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Server } from 'socket.io';
 import {
-  DEFAULT_MAP,
-  KILL_TARGET_OPTIONS,
-  MAPS,
-  MATCH_KILL_TARGET,
-  MATCH_TIME_LIMIT,
   PROTOCOL_VERSION,
-  ROOM_RECYCLE_MS,
-  TIME_LIMIT_OPTIONS,
   getMap,
+  normalizeRoomCode,
   type BotDifficulty,
+  type CreateRoomMsg,
   type InputMsg,
   type JoinMsg,
+  type RoomSettingsMsg,
 } from '@DoShoot/shared';
 import { Room } from './room';
+import { RoomManager, sanitizeRule, sanitizeSettings } from './rooms';
 
 const PORT = Number(process.env.PORT ?? 3000);
-
-/** 对局生命周期校验（FR-L7/NFR-5）：仅接受白名单值，非法回退默认 */
-function sanitizeRule(raw: JoinMsg): { killTarget: number; timeLimitSec: number } {
-  const killTarget =
-    typeof raw.killTarget === 'number' && KILL_TARGET_OPTIONS.includes(raw.killTarget)
-      ? raw.killTarget
-      : MATCH_KILL_TARGET;
-  const timeLimitSec =
-    typeof raw.timeLimitSec === 'number' && TIME_LIMIT_OPTIONS.includes(raw.timeLimitSec)
-      ? raw.timeLimitSec
-      : MATCH_TIME_LIMIT;
-  return { killTarget, timeLimitSec };
-}
 
 /** 客户端构建产物目录（存在则同源托管，局域网设备直接访问 http://<IP>:3000 即可加入） */
 const DIST_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../client/dist');
@@ -78,91 +62,6 @@ const httpServer = createServer(async (req, res) => {
   res.end('Not Found (dev: corepack pnpm dev:client · prod: corepack pnpm build)');
 });
 
-/** 房间管理器（FR-L3/L4/N6）：按地图选房、快速加入人最多的非满房间、空房 60s 回收 */
-class RoomManager {
-  private readonly rooms: Room[] = [];
-  private seq = 0;
-
-  constructor(private readonly io: Server) {}
-
-  /** 选房（FR-L3/L4/L7/N6）：优先「地图 + 对局生命周期规则」都相同且未满的房间；无则新建。
-   *  mapId 无效（快速加入）时全局选人最多者，但优先与请求规则相同的房间（避免偏好被稀释）；
-   *  规则不一致的房间不混入——对局生命周期是建房时确定的房间属性 */
-  pick(
-    mapId: string | undefined,
-    difficulty: BotDifficulty,
-    rule: { killTarget: number; timeLimitSec: number },
-  ): Room {
-    const sameRule = (r: Room): boolean =>
-      r.killTarget === rule.killTarget && r.timeLimitSec === rule.timeLimitSec;
-    const map = getMap(mapId);
-    if (map) {
-      const candidates = this.rooms.filter(
-        (r) => r.mapId === map.id && sameRule(r) && r.hasCapacity,
-      );
-      if (candidates.length > 0) {
-        return candidates.reduce((a, b) => (b.playerCount > a.playerCount ? b : a));
-      }
-      return this.create(map.id, difficulty, rule);
-    }
-    // 快速加入（FR-L4/L7）：优先同规则中人最多的非满房间；无则随机地图新建。
-    // 规则不一致的房间不混入（对局生命周期是建房时确定的房间属性，FR-L7「避免不同偏好玩家混房」）
-    const openSameRule = this.rooms.filter((r) => sameRule(r) && r.hasCapacity);
-    if (openSameRule.length > 0) {
-      return openSameRule.reduce((a, b) => (b.playerCount > a.playerCount ? b : a));
-    }
-    const ids = Object.keys(MAPS);
-    return this.create(ids[Math.floor(Math.random() * ids.length)]!, difficulty, rule);
-  }
-
-  /** 断线重连（FR-N5）：在任意房间中查找宽限期内的断线实体 */
-  findRejoinable(fighterId: string): Room | null {
-    return (
-      this.rooms.find((r) => r.hasFighter(fighterId) && r.isDisconnected(fighterId)) ?? null
-    );
-  }
-
-  /** 空房间回收（FR-N6）：空置超过 ROOM_RECYCLE_MS 则销毁（计时基准 = 最后一名真人移除时刻；断线宽限期内的玩家仍计入） */
-  sweep(): void {
-    const now = Date.now();
-    for (let i = this.rooms.length - 1; i >= 0; i--) {
-      const r = this.rooms[i]!;
-      if (r.emptySince !== null && now - r.emptySince > ROOM_RECYCLE_MS) {
-        r.destroy();
-        this.rooms.splice(i, 1);
-        console.log(`[server] room recycled: ${r.id} (${r.mapId})`);
-      }
-    }
-  }
-
-  /** 全部销毁（smoke 退出路径用） */
-  destroyAll(): void {
-    for (const r of this.rooms) r.destroy();
-    this.rooms.length = 0;
-  }
-
-  private create(
-    mapId: string,
-    difficulty: BotDifficulty,
-    rule: { killTarget: number; timeLimitSec: number },
-  ): Room {
-    const room = new Room(
-      this.io,
-      getMap(mapId) ?? DEFAULT_MAP,
-      `ffa-${++this.seq}`,
-      difficulty,
-      rule.killTarget,
-      rule.timeLimitSec,
-    );
-    this.rooms.push(room);
-    console.log(
-      `[server] room created: ${room.id} (map=${room.mapId}, bots=${difficulty}, ` +
-        `rule=${room.killTarget}kills/${room.timeLimitSec}s)`,
-    );
-    return room;
-  }
-}
-
 const io = new Server(httpServer, { cors: { origin: true } });
 const rooms = new RoomManager(io);
 /** socket → 对局会话（fighterId 与 socket.id 分离：断线重连后 fighterId 保持不变） */
@@ -182,7 +81,33 @@ io.on('connection', (socket) => {
       socket.emit('joinRejected', { reason: 'version' });
       return;
     }
-    // 断线重连（FR-N5）：宽限期内的原实体直接恢复
+    const name = sanitizeNickname(raw.nickname, socket.id);
+    // 房间号进房（FR-L8）：等待态与对局中均可；号非法/不存在 → noRoom，满 → full
+    const rawCode = typeof raw.roomCode === 'string' ? raw.roomCode : '';
+    if (rawCode !== '') {
+      const code = normalizeRoomCode(rawCode);
+      const room = code ? rooms.findByCode(code) : null;
+      if (!room) {
+        socket.emit('joinRejected', { reason: 'noRoom' });
+        return;
+      }
+      if (!room.hasCapacity) {
+        socket.emit('joinRejected', { reason: 'full' });
+        return;
+      }
+      joined = true;
+      room.addPlayer(socket.id, name, raw.progress);
+      sessions.set(socket.id, { room, fighterId: socket.id });
+      socket.join(room.id);
+      socket.emit('welcome', room.welcome(socket.id));
+      console.log(
+        `[server] joined by code ${room.code}: ${socket.id} as "${name}" (${room.playerCount} players)`,
+      );
+      return;
+    }
+    // 断线重连（FR-N5）：宽限期内的原实体直接恢复。放在房间号分支之后——
+    // 显式「加入房间」优先于重连（体检修复批次 3）：玩家主动输入房间号表达的是「进这个房间」，
+    // 不应被 30s 内残留的 rejoinId 拉回上一个对局；rejoinId 仅在未携带 roomCode 时生效。
     const rejoinId = typeof raw.rejoinId === 'string' ? raw.rejoinId : null;
     if (rejoinId) {
       const room = rooms.findRejoinable(rejoinId);
@@ -196,7 +121,6 @@ io.on('connection', (socket) => {
       }
       // 不可重连（超时/房间已回收）→ 按新进房处理
     }
-    const name = sanitizeNickname(raw.nickname, socket.id);
     const mapId = typeof raw.mapId === 'string' && getMap(raw.mapId) ? raw.mapId : undefined;
     const difficulty: BotDifficulty =
       raw.difficulty === 'easy' || raw.difficulty === 'hard' ? raw.difficulty : 'normal';
@@ -213,6 +137,51 @@ io.on('connection', (socket) => {
     socket.join(room.id);
     socket.emit('welcome', room.welcome(socket.id));
     console.log(`[server] joined: ${socket.id} as "${name}" (${room.playerCount} players)`);
+  });
+
+  // 房主建房（FR-L8 等待房间）：建房进入等待态，房主在等待界面调参、人齐后 startMatch
+  socket.on('createRoom', (raw: CreateRoomMsg) => {
+    if (joined) return;
+    if (!raw || raw.version !== PROTOCOL_VERSION) {
+      socket.emit('joinRejected', { reason: 'version' });
+      return;
+    }
+    const name = sanitizeNickname(raw.nickname, socket.id);
+    const mapId = typeof raw.mapId === 'string' && getMap(raw.mapId) ? raw.mapId : undefined;
+    const difficulty: BotDifficulty =
+      raw.difficulty === 'easy' || raw.difficulty === 'hard' ? raw.difficulty : 'normal';
+    const room = rooms.createRoom(mapId, difficulty, sanitizeRule(raw));
+    joined = true;
+    room.addPlayer(socket.id, name, raw.progress, true); // 建房者 = 房主
+    sessions.set(socket.id, { room, fighterId: socket.id });
+    socket.join(room.id);
+    socket.emit('welcome', room.welcome(socket.id));
+    console.log(
+      `[server] room hosted: ${socket.id} as "${name}" -> ${room.id} (code=${room.code})`,
+    );
+  });
+
+  // 房主调整等待房间参数（FR-L8）：非房主/非等待态/全部字段非法 → 静默忽略（NFR-5 防伪造）
+  socket.on('updateRoom', (raw: RoomSettingsMsg) => {
+    if (!joined) return;
+    const s = sessions.get(socket.id);
+    if (!s) return;
+    const ok = s.room.updateSettings(s.fighterId, sanitizeSettings(raw));
+    if (!ok) console.log(`[server] updateRoom ignored: ${socket.id} (${s.room.id})`);
+  });
+
+  // 房主开局（FR-L8）：等待态 → 对局态；向房内全部成员重发 welcome（room.state='running'），
+  // 客户端复用既有进局链路从等待界面切换进对局（含当前地图/实体快照）
+  socket.on('startMatch', () => {
+    if (!joined) return;
+    const s = sessions.get(socket.id);
+    if (!s || !s.room.start(s.fighterId)) return; // 仅房主且等待态（NFR-5 防伪造，静默忽略）
+    console.log(
+      `[server] match started: room ${s.room.id} (code=${s.room.code}, ${s.room.playerCount} players, bots=${s.room.botCount})`,
+    );
+    for (const [sid, sess] of sessions) {
+      if (sess.room === s.room) io.to(sid).emit('welcome', sess.room.welcome(sess.fighterId));
+    }
   });
 
   // 延迟测量（FR-N4，M4）：客户端定期 ping，服务端原样回 pong 供其计算 RTT（随输入上报 pingMs）

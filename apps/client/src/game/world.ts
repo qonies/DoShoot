@@ -50,6 +50,8 @@ const MAX_BLOOM = 9;
 const SHAKE_PER_RECOIL = 0.05;
 /** 预测弹药与权威差值超过该阈值时按快照校正 */
 const AMMO_RESYNC_DIFF = 2;
+/** 切枪上报后等待服务端确认的窗口（秒，FR-E1 防闪烁）：窗口内快照仍带 rush 时不回授 */
+const RUSH_SWITCH_ACK_TTL = 1;
 
 /** 曳光池（M1 combat.ts 的表现部分保留在客户端） */
 const TRACER_TTL = 0.1;
@@ -110,6 +112,12 @@ export class NetWorld {
   /** 待上报的切枪意图（数字键直选 / 滚轮折算，FR-W4）：经 buildInput 发送后清空。
    *  修复：滚轮切枪此前只改本地预测、从不上报服务端，~250ms 后被权威 weaponId 和解「切回」 */
   private pendingSwitch: WeaponId | null = null;
+  /** 已上报但未被服务端快照确认的切枪（FR-E1 防闪烁，体检修复批次 3）：
+   *  pendingSwitch 在 buildInput 上报后立即清空，此后到达的旧快照可能仍带 rush=true——
+   *  仅靠它防不住闪烁（窗口 ≈ 一个上行周期 ~33ms）。确认窗口内不回授 rush，
+   *  避免「本地放弃 → 旧快照重新授予 → 重复全屏横幅/音效」；确认或超时后解除 */
+  private switchAckPending: WeaponId | null = null;
+  private switchAckAt = 0;
   /** 已发送但未被服务端确认的输入（快照和解时重放，FR-N4） */
   private pendingInputs: Array<{ seq: number; moveX: number; moveY: number; dt: number }> = [];
   /** 距上次发送输入累计的真实 dt */
@@ -219,6 +227,11 @@ export class NetWorld {
       switchTo: alive ? this.pendingSwitch : null,
     };
     this.firePressesPending = 0;
+    if (alive && this.pendingSwitch !== null) {
+      // 记录「已上报待确认」的切枪：rush 回授抑制窗口自本条上报起算（FR-E1 防闪烁）
+      this.switchAckPending = this.pendingSwitch;
+      this.switchAckAt = this.localTime;
+    }
     this.pendingSwitch = null;
     if (alive) {
       // 记录该条输入及其覆盖的 dt，供快照和解重放（FR-N4）
@@ -254,6 +267,7 @@ export class NetWorld {
         this.local.y = e.y;
         this.inv.resetAll(); // 彩蛋模式跨重生保留（FR-E1）：服务端 respawn 的 resetAll 同语义
         this.weaponMismatchSince = null;
+        this.switchAckPending = null;
         this.recoilBloom = 0;
         this.pendingInputs = [];
         this.syncRush(e);
@@ -271,6 +285,10 @@ export class NetWorld {
       this.local.kills = e.kills;
       // 冲锋枪彩蛋模式权威同步（FR-E1）：先于武器校正，grantRush 后 current='rush' 与快照一致
       this.syncRush(e);
+      // 切枪确认：服务端快照已带上目标武器 → 解除 rush 回授抑制窗口（FR-E1 防闪烁）
+      if (this.switchAckPending !== null && e.weaponId === this.switchAckPending) {
+        this.switchAckPending = null;
+      }
       // 权威武器校正：切换输入丢失/被限频丢弃时防两端 current 分叉；
       // ~250ms 去抖以容忍「客户端已预测切枪、服务端快照尚未跟上」的瞬时不一致
       if (e.weaponId !== this.inv.current) {
@@ -302,14 +320,18 @@ export class NetWorld {
       // 死亡期间输入不被消费（服务端清队列、不 ack）；丢弃待重放输入，防止复活时位置漂移
       this.pendingInputs = [];
       this.firePressesPending = 0;
+      this.switchAckPending = null;
     }
   }
 
   /** 冲锋枪彩蛋模式快照同步（FR-E1）：rush 字段为权威状态，本地预测侧跟随（激活时回调提示一次）。
-   *  本地已折算出待上报切枪（pendingSwitch）时不回授 rush：避免「本地放弃 → 旧快照又授予」的闪烁，
-   *  该切枪很快会被服务端消费并撤销 rush，两端自然对齐 */
+   *  本地已折算出切枪并在服务端确认窗口内（switchAckPending）时不回授 rush：避免
+   *  「本地放弃 → 旧快照又授予」的闪烁与重复横幅；该切枪很快会被服务端消费并撤销 rush，
+   *  两端自然对齐（窗口超时则按快照权威状态回授，防切枪输入丢失后永久卡在常规武器） */
   private syncRush(e: SnapshotMsg['entities'][number]): void {
-    if (e.rush === true && !this.inv.rushActive && this.pendingSwitch === null) {
+    const switching =
+      this.switchAckPending !== null && this.localTime - this.switchAckAt < RUSH_SWITCH_ACK_TTL;
+    if (e.rush === true && !this.inv.rushActive && !switching) {
       this.inv.grantRush(this.localTime);
       this.cb.onRushActivated();
     } else if (e.rush !== true && this.inv.rushActive) {
@@ -366,6 +388,7 @@ export class NetWorld {
         this.pendingInputs = [];
         this.firePressesPending = 0;
         this.weaponMismatchSince = null;
+        this.switchAckPending = null;
         this.cb.onMatchReset();
       }
     }

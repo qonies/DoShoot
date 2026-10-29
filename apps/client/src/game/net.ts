@@ -1,11 +1,16 @@
 /** Socket.IO 连接封装（强制 websocket-only，见 techContext；消息类型来自 shared/protocol）。
- *  M4：ping/pong 周期测量 RTT（FR-N4 延迟补偿回溯），随输入上报 pingMs。 */
+ *  M4：ping/pong 周期测量 RTT（FR-N4 延迟补偿回溯），随输入上报 pingMs。
+ *  FR-L8 等待房间：createRoom（新建游戏）/updateRoom（房主调参）/startMatch（房主开局）
+ *  + onRoomUpdate（等待界面实时同步）。 */
 
 import { io, type Socket } from 'socket.io-client';
 import type {
+  CreateRoomMsg,
   InputMsg,
   JoinMsg,
   JoinRejectedMsg,
+  RoomInfoMsg,
+  RoomSettingsMsg,
   RushModeMsg,
   WelcomeMsg,
 } from '@DoShoot/shared';
@@ -13,6 +18,8 @@ import type {
 export interface NetHandlers {
   onWelcome(msg: WelcomeMsg): void;
   onRejected(reason: JoinRejectedMsg['reason']): void;
+  /** 等待房间信息更新（FR-L8）：加入/离开/改参数/换房主/开局 */
+  onRoomUpdate(msg: RoomInfoMsg): void;
   onDisconnected(): void;
   /** 连接失败（服务端未启动/网络不可达）。socket.io 默认无限重试，由上层决定是否 close */
   onConnectError(): void;
@@ -37,6 +44,9 @@ export class Net {
     });
     this.socket.on('welcome', (m: WelcomeMsg) => this.handlers.onWelcome(m));
     this.socket.on('joinRejected', (m: JoinRejectedMsg) => this.handlers.onRejected(m?.reason ?? 'version'));
+    this.socket.on('roomUpdate', (m: RoomInfoMsg) => {
+      if (m && typeof m === 'object') this.handlers.onRoomUpdate(m);
+    });
     this.socket.on('disconnect', () => this.handlers.onDisconnected());
     this.socket.on('connect_error', () => this.handlers.onConnectError());
   }
@@ -55,6 +65,21 @@ export class Net {
 
   join(msg: JoinMsg): void {
     this.socket.emit('join', msg);
+  }
+
+  /** 新建游戏（FR-L8 等待房间）：建房进入等待态，本人为房主 */
+  createRoom(msg: CreateRoomMsg): void {
+    this.socket.emit('createRoom', msg);
+  }
+
+  /** 房主调整等待房间参数（FR-L8）：服务端白名单校验 + 房主权限校验 */
+  updateRoom(msg: RoomSettingsMsg): void {
+    this.socket.emit('updateRoom', msg);
+  }
+
+  /** 房主开局（FR-L8）：全员收到重发的 welcome（room.state='running'）进入对局 */
+  startMatch(): void {
+    this.socket.emit('startMatch');
   }
 
   sendInput(msg: InputMsg): void {

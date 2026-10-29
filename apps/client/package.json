@@ -1,6 +1,6 @@
 {
   "name": "@DoShoot/client",
-  "version": "0.3.4",
+  "version": "0.3.9",
   "private": true,
   "type": "module",
   "scripts": {

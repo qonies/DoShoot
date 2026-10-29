@@ -169,6 +169,11 @@ export class Hud {
     this.scoreboard.classList.add('hidden');
   }
 
+  /** 计分板当前是否可见（主循环按帧刷新数据用；避免每帧 querySelector 读 DOM） */
+  get scoreboardVisible(): boolean {
+    return this.sbVisible;
+  }
+
   /** 武器解锁全屏提示（FR-W1） */
   showUnlock(text: string): void {
     this.unlockText.textContent = text;

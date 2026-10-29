@@ -2,6 +2,7 @@
  *  覆盖碰撞/开火解算/武器数值/库存状态机/解锁链/滚轮顺序/房间状态机——此前这些最核心的逻辑零测试覆盖。 */
 
 import {
+  CHEAT_RUSH_CODE,
   DEFAULT_MAP,
   MAPS,
   WEAPON_ORDER,
@@ -11,6 +12,7 @@ import {
   fireIntervalSec,
   isWall,
   nextWeaponId,
+  normalizeRoomCode,
   pickSpawnFarthest,
   rayVsAABB,
   raycastWalls,
@@ -22,6 +24,7 @@ import {
   type GameMap,
 } from '@DoShoot/shared';
 import { Room } from '../apps/server/src/room';
+import { clientToNdc, dpadVector, stickVector } from '../apps/client/src/game/touchmath';
 import type { Server } from 'socket.io';
 
 let passed = 0;
@@ -229,17 +232,73 @@ ok('isWall 越界视为墙', isWall(map, -1, 5) && isWall(map, 5, 999));
   eq('nextWeaponId rush-1=sniper', nextWeaponId('rush', -1), 'sniper');
 }
 
+// ---------- normalizeRoomCode（FR-L8 房间号规范化） ----------
+eq('normalizeRoomCode 纯 4 位数字', normalizeRoomCode('4821'), '4821');
+eq('normalizeRoomCode 去空格与横线', normalizeRoomCode(' 48-21 '), '4821');
+eq('normalizeRoomCode 3 位拒绝', normalizeRoomCode('482'), null);
+eq('normalizeRoomCode 5 位拒绝', normalizeRoomCode('48215'), null);
+eq('normalizeRoomCode 含字母拒绝', normalizeRoomCode('48a1'), null);
+eq('normalizeRoomCode 空串拒绝', normalizeRoomCode(''), null);
+
+// ---------- stickVector（FR-U6 触屏摇杆：钳制/归一化/死区/平滑） ----------
+{
+  const full = stickVector(64, 0, 64, 14);
+  eq('stickVector 满程右移 x=1', full.x, 1, 1e-6);
+  eq('stickVector 满程右移 y=0', full.y, 0);
+  const diag = stickVector(64, 64, 64, 14);
+  ok('stickVector 斜向超程钳制（模长 1）', Math.abs(Math.hypot(diag.x, diag.y) - 1) < 1e-6);
+  const half = stickVector(32, 0, 64, 14);
+  ok('stickVector 半程幅度平滑（0 < mag < 1）', half.x > 0 && half.x < 1);
+  const dz = stickVector(14, 0, 64, 14);
+  ok('stickVector 死区边缘为零', dz.x === 0 && dz.y === 0);
+  const inDz = stickVector(5, 5, 64, 14);
+  ok('stickVector 死区内为零', inDz.x === 0 && inDz.y === 0);
+  eq('stickVector radius=0 安全', stickVector(10, 10, 0, 14).x, 0);
+  const up = stickVector(0, -64, 64, 14);
+  eq('stickVector 上推 y=-1（屏幕 y 向下 = 世界 y 同向）', up.y, -1, 1e-6);
+}
+
+// ---------- dpadVector / clientToNdc（FR-U6 pad 模式：D-pad + 点击射击） ----------
+{
+  const u = dpadVector(true, false, false, false);
+  eq('dpad 上=(0,-1)', u.y, -1, 1e-6);
+  eq('dpad 上 x=0', u.x, 0);
+  const d = dpadVector(false, true, false, false);
+  eq('dpad 下=(0,1)', d.y, 1, 1e-6);
+  const l = dpadVector(false, false, true, false);
+  eq('dpad 左=(-1,0)', l.x, -1, 1e-6);
+  const r = dpadVector(false, false, false, true);
+  eq('dpad 右=(1,0)', r.x, 1, 1e-6);
+  const diag = dpadVector(true, false, false, true); // 上 + 右 = 右上斜向
+  ok('dpad 右上斜向模长 1', Math.abs(Math.hypot(diag.x, diag.y) - 1) < 1e-6);
+  ok('dpad 斜向分量 1/√2', Math.abs(diag.x - Math.SQRT1_2) < 1e-6 && Math.abs(diag.y + Math.SQRT1_2) < 1e-6);
+  const cancel = dpadVector(true, true, false, false); // 对向同按抵消
+  ok('dpad 上下对向抵消', cancel.x === 0 && cancel.y === 0);
+  const none = dpadVector(false, false, false, false);
+  ok('dpad 无输入为零向量', none.x === 0 && none.y === 0);
+
+  const c = clientToNdc(50, 50, 100, 100);
+  ok('clientToNdc 中心=(0,0)', Math.abs(c.x) < 1e-9 && Math.abs(c.y) < 1e-9);
+  const tl = clientToNdc(0, 0, 100, 100);
+  ok('clientToNdc 左上=(-1,1)', tl.x === -1 && tl.y === 1);
+  const br = clientToNdc(100, 100, 100, 100);
+  ok('clientToNdc 右下=(1,-1)', br.x === 1 && br.y === -1);
+  const safe = clientToNdc(10, 10, 0, 0);
+  ok('clientToNdc 零尺寸安全', safe.x === 0 && safe.y === 0);
+}
+
 // ---------- 汇总（含服务端 Room 状态机的实时等待检查） ----------
-/** Room 状态机检查：空房复用重置 / 已结束房间结算补发 / rematch 不复活断线者。
+/** Room 状态机检查：空房复用重置 / 已结束房间结算补发 / rematch 不复活断线者 / 等待房间（FR-L8）。
  *  用 1s 时限的房间让对局自然结束（killTarget=30 不可能被 Bot 提前触发），三间并行推进。 */
 async function roomChecks(): Promise<void> {
   // 广播桩：Room 仅需 io.to(roomId).emit，单测不建立真实连接
   const fakeIo = { to: () => ({ emit: () => {} }) } as unknown as Server;
   const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-  const reuse = new Room(fakeIo, DEFAULT_MAP, 'unit-reuse', 'normal', 30, 1);
-  const joinOver = new Room(fakeIo, DEFAULT_MAP, 'unit-joinover', 'normal', 30, 1);
-  const reGrp = new Room(fakeIo, DEFAULT_MAP, 'unit-rematch', 'normal', 30, 1);
+  // 既有对局状态机检查需立即开局的房间（autoStart = true，快速加入新建语义）
+  const reuse = new Room(fakeIo, DEFAULT_MAP, 'unit-reuse', 'normal', 30, 1, undefined, '', true);
+  const joinOver = new Room(fakeIo, DEFAULT_MAP, 'unit-joinover', 'normal', 30, 1, undefined, '', true);
+  const reGrp = new Room(fakeIo, DEFAULT_MAP, 'unit-rematch', 'normal', 30, 1, undefined, '', true);
   reuse.addPlayer('p0', 'P0');
   joinOver.addPlayer('a', 'A');
   reGrp.addPlayer('a', 'A');
@@ -263,6 +322,35 @@ async function roomChecks(): Promise<void> {
   ok('rematch 后对局重置（matchEnd 清空）', reGrp.welcome('a').matchEnd === undefined);
   ok('断线者保持宽限（不被复活）', reGrp.isDisconnected('a'));
   ok('宽限内仍可重连', reGrp.tryRejoin('a'));
+
+  // 5) 等待房间状态机（FR-L8）：waiting 不步进不广播、房主专属调参与开局、Bot 延后加入
+  const wait = new Room(fakeIo, DEFAULT_MAP, 'unit-wait', 'normal', 30, 300, 5, '4821', false);
+  ok('等待房初始为 waiting 态', wait.state === 'waiting');
+  ok('房间号保持传入值', wait.code === '4821');
+  wait.addPlayer('h1', 'H1', undefined, true);
+  wait.addPlayer('h2', 'H2');
+  ok('建房者为房主', wait.hostId === 'h1');
+  ok('等待态彩蛋口令被拒（NFR-5/FR-E1，防止开局自带无限弹药）', !wait.requestRush('h1', CHEAT_RUSH_CODE));
+  ok('等待态不加入 Bot（开局才补齐）', wait.roomInfo().players.length === 2 && wait.welcome('h1').entities.every((e) => !e.bot));
+  ok('welcome.room 完整（FR-L8）', wait.welcome('h2').room?.code === '4821' && wait.welcome('h2').room?.hostId === 'h1');
+  ok('非房主调参被拒', !wait.updateSettings('h2', { killTarget: 50 }));
+  ok('房主调参生效', wait.updateSettings('h1', { killTarget: 50, botCount: 0 }));
+  ok('参数回流 welcome.room', wait.welcome('h2').room?.killTarget === 50);
+  ok('非法参数被白名单过滤', !wait.updateSettings('h1', { killTarget: 77, timeLimitSec: 123, botCount: 4 }));
+  ok('换地图生效', wait.updateSettings('h1', { mapId: 'alley' }) && wait.mapId === 'alley');
+  const moved = wait.welcome('h1').entities;
+  ok('换图后玩家坐标重置到新图内', moved.length === 2 && moved.every((e) => e.x >= 0 && e.x <= 40 && e.y >= 0 && e.y <= 40));
+  await sleep(1200);
+  ok('等待态不步进（tick 冻结）', wait.welcome('h1').tick === 0);
+  ok('非房主不能开局', !wait.start('h2'));
+  ok('房主开局生效', wait.start('h1'));
+  ok('开局后进入 running 态', wait.welcome('h1').room?.state === 'running');
+  ok('开局后 Bot 按 botCount=0 补齐', wait.welcome('h1').entities.every((e) => !e.bot));
+  ok('开局后非房主调参被拒（running 态锁定）', !wait.updateSettings('h1', { killTarget: 100 }));
+  ok('开局后彩蛋口令可授予（守卫仅拦等待态）', wait.requestRush('h1', CHEAT_RUSH_CODE));
+  wait.removePlayer('h1');
+  ok('房主离开后移交下一位真人', wait.hostId === 'h2');
+  wait.destroy(); // 销毁 interval，让事件循环自然退出（与其余房间一致）
 
   reuse.destroy();
   joinOver.destroy();

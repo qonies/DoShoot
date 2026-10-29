@@ -1,10 +1,12 @@
 /** 权威房间模拟（FR-N1/N2）：30Hz 固定步长、输入校验与结算、伤害/击杀/重生、Bot 填充、快照广播 */
 
 import {
-  BOT_FILL_MAX,
+  BOT_COUNT_DEFAULT,
+  BOT_COUNT_OPTIONS,
   CHEAT_RUSH_CODE,
   HITBOX_HALF,
   INTERP_DELAY,
+  KILL_TARGET_OPTIONS,
   LAG_COMP_HISTORY,
   LAG_COMP_MAX_REWIND,
   MATCH_KILL_TARGET,
@@ -18,9 +20,11 @@ import {
   ROOM_CAPACITY,
   SIM_TICK_RATE,
   SNAPSHOT_RATE_MAX,
+  TIME_LIMIT_OPTIONS,
   WEAPON_ORDER,
   WeaponInventory,
   damageAtRange,
+  getMap,
   pickSpawnFarthest,
   resolveCircleWalls,
   resolveShot,
@@ -31,6 +35,10 @@ import {
   type GameEvent,
   type GameMap,
   type InputMsg,
+  type RoomInfoMsg,
+  type RoomPlayerInfo,
+  type RoomSettingsMsg,
+  type RoomState,
   type ShotTarget,
   type SnapshotMsg,
   type StandingRow,
@@ -106,9 +114,26 @@ function clampUnit(v: number): number {
 
 export class Room {
   readonly id: string;
-  readonly mapId: string;
+  /** 房间号（FR-L8，4 位数字）：局域网玩家在大厅输入后按号进房 */
+  readonly code: string;
+  /** 房间状态（FR-L8）：waiting = 等待开局（不模拟不广播、房主可调参数）；running = 对局中 */
+  state: RoomState;
+  /** 房主（FR-L8）：等待态唯一可调参数/开局者；离开或断线时移交下一位真人 */
+  hostId: string | null = null;
+  /** 地图（FR-L8 等待态可换）：换图时全员重置出生点 */
+  private map: GameMap;
+  get mapId(): string {
+    return this.map.id;
+  }
   /** 房间变为空（无真人玩家）的时刻（FR-N6：空房 60s 后回收的计时基准）；null = 非空 */
   emptySince: number | null = null;
+  /** Bot 难度（FR-B3；FR-L8 等待态可调） */
+  difficulty: BotDifficulty;
+  /** 对局生命周期（FR-L7；FR-L8 等待态可调）：先到击杀目标或时限即结束（FR-M1） */
+  killTarget: number;
+  timeLimitSec: number;
+  /** 房内 Bot 数量（FR-L8，BOT_COUNT_OPTIONS；等待期间不加入，开局时按此补齐） */
+  botCount: number;
   private readonly fighters = new Map<string, SimFighter>();
   private readonly inputs = new Map<string, InputMsg[]>();
   private botSeq = 0;
@@ -128,16 +153,29 @@ export class Room {
 
   constructor(
     private readonly io: Server,
-    private readonly map: GameMap,
+    map: GameMap,
     roomId: string,
-    private readonly difficulty: BotDifficulty = 'normal',
-    /** 对局生命周期（FR-L7）：建房者的大厅选择；先到击杀目标或时限即结束（FR-M1） */
-    readonly killTarget: number = MATCH_KILL_TARGET,
-    readonly timeLimitSec: number = MATCH_TIME_LIMIT,
+    /** Bot 难度（FR-B3，等待态可调，FR-L8） */
+    difficulty: BotDifficulty = 'normal',
+    /** 对局生命周期（FR-L7，等待态可调）：先到击杀目标或时限即结束（FR-M1） */
+    killTarget: number = MATCH_KILL_TARGET,
+    timeLimitSec: number = MATCH_TIME_LIMIT,
+    /** 房内 Bot 数量（FR-L8，等待态可调）：等待期间不加入，开局时按此补齐 */
+    botCount: number = BOT_COUNT_DEFAULT,
+    /** 房间号（FR-L8，由 RoomManager 生成传入） */
+    code = '',
+    /** 快速加入新建房间时立即开局（FR-L1 保持「秒进对局」）；「新建游戏」= false（等待房主开局） */
+    autoStart = false,
   ) {
     this.id = roomId;
-    this.mapId = map.id;
-    for (let i = 0; i < BOT_FILL_MAX; i++) this.addBot();
+    this.code = code;
+    this.map = map;
+    this.difficulty = difficulty;
+    this.killTarget = killTarget;
+    this.timeLimitSec = timeLimitSec;
+    this.botCount = botCount;
+    this.state = autoStart ? 'running' : 'waiting';
+    // Bot 不在构造时填充：addPlayer → adjustBots 按「状态 + botCount」补齐（等待态恒 0，开局才加入）
     // interval 只负责按 1000/SNAPSHOT_RATE_MAX 唤醒；每次唤醒推进全部到期模拟步并聚合广播一次快照
     this.lastStepReal = performance.now();
     this.timer = setInterval(() => this.runFrame(), Math.round(1000 / SNAPSHOT_RATE_MAX));
@@ -152,9 +190,9 @@ export class Room {
     const nowReal = performance.now();
     let elapsedMs = nowReal - this.lastStepReal;
     this.lastStepReal = nowReal;
-    // 空房（Bot 已清零、等待回收）：无可模拟实体与观众，跳过步进与广播省 CPU；
-    // lastStepReal 照常推进，重新进房时不产生积压追步
-    if (this.fighters.size === 0) return;
+    // 空房（Bot 已清零、等待回收）或等待开局（FR-L8）：无可模拟实体/对局未开始，
+    // 跳过步进与广播省 CPU；lastStepReal 照常推进，重新进房/开局时不产生积压追步
+    if (this.state === 'waiting' || this.fighters.size === 0) return;
     if (elapsedMs > 250) elapsedMs = 250; // 长时间停顿（如进程挂起）后丢弃积压
     this.acc += elapsedMs / 1000;
     const events: GameEvent[] = this.pendingEvents;
@@ -179,7 +217,7 @@ export class Room {
     return this.playerCount < ROOM_CAPACITY;
   }
 
-  addPlayer(id: string, name: string, progress?: Partial<Record<WeaponId, number>>): void {
+  addPlayer(id: string, name: string, progress?: Partial<Record<WeaponId, number>>, asHost = false): void {
     const wasEmpty = this.playerCount === 0;
     const f = this.createFighter(id, name, false);
     this.applyProgress(f, progress);
@@ -188,8 +226,13 @@ export class Room {
     // 空房复用（FR-N6 回收等待期 ≤60s / 首名玩家）：重置对局——不把上一场的 matchStart
     // 倒计时与「已结束」状态残留给新玩家（否则会秒结束 / 无法开火且无结算面板，卡死）
     if (wasEmpty) this.resetMatch();
+    // 房主（FR-L8）：显式指定（建房者）优先；否则首位真人自动接任（房主离开后的后来者）
+    if (asHost || this.hostId === null) this.hostId = id;
     this.adjustBots();
     this.emptySince = null;
+    // 等待界面实时同步新成员（FR-L8）；对局中玩家列表经快照/计分板呈现，无需 roomUpdate。
+    // 注意：加入者此时可能尚未 socket.join，其等待界面由 welcome.room 承载
+    if (this.state === 'waiting') this.broadcastRoomInfo();
   }
 
   /** 对局重置（空房复用）：回合计时起点、清除已结束状态与遗留 rematch 事件 */
@@ -203,12 +246,23 @@ export class Room {
   removePlayer(id: string): void {
     this.fighters.delete(id);
     this.inputs.delete(id);
+    // 房主移交（FR-L8）：房主离开时把房主权交给剩余的第一位真人；无人则置空（房间照常回收）
+    if (this.hostId === id) {
+      const next = [...this.fighters.values()].find((f) => !f.bot);
+      this.hostId = next ? next.id : null;
+    }
     this.adjustBots();
     if (this.playerCount === 0) this.emptySince = Date.now(); // FR-N6：从变空时刻起计时
+    if (this.state === 'waiting') this.broadcastRoomInfo();
   }
 
-  /** 断线（FR-N5）：保留实体进入宽限期，输入清零（残影原地站立，仍可被命中） */
+  /** 断线（FR-N5）：对局中保留实体进入宽限期，输入清零（残影原地站立，仍可被命中）；
+   *  等待开局态（FR-L8）无对局状态可保留，且模拟时钟冻结会使宽限计时失效——视作立即离开 */
   markDisconnected(id: string): void {
+    if (this.state === 'waiting') {
+      this.removePlayer(id);
+      return;
+    }
     const f = this.fighters.get(id);
     if (!f || f.disconnectAt !== null) return;
     f.disconnectAt = this.time;
@@ -237,9 +291,96 @@ export class Room {
     return true;
   }
 
+  // ---------- 等待房间（FR-L8） ----------
+
+  /** 房间信息快照（等待界面 / welcome.room 消费） */
+  roomInfo(): RoomInfoMsg {
+    const players: RoomPlayerInfo[] = [];
+    for (const f of this.fighters.values()) {
+      if (f.bot) continue; // 等待界面只列真人；Bot 数量经 botCount 单独呈现
+      players.push({ id: f.id, name: f.name, host: f.id === this.hostId });
+    }
+    return {
+      code: this.code,
+      hostId: this.hostId ?? '',
+      state: this.state,
+      mapId: this.mapId,
+      difficulty: this.difficulty,
+      killTarget: this.killTarget,
+      timeLimitSec: this.timeLimitSec,
+      botCount: this.botCount,
+      capacity: ROOM_CAPACITY,
+      players,
+    };
+  }
+
+  /** 广播房间信息（FR-L8）：等待态任何变化（加入/离开/改参数/换房主） */
+  broadcastRoomInfo(): void {
+    this.io.to(this.id).emit('roomUpdate', this.roomInfo());
+  }
+
+  /** 房主调整房间参数（FR-L8）：仅等待态且房主本人；返回是否生效。
+   *  换地图时全员按新图重置出生点并清位置历史（防延迟补偿按旧图坐标回溯） */
+  updateSettings(byId: string, patch: RoomSettingsMsg): boolean {
+    if (this.state !== 'waiting' || this.hostId !== byId) return false;
+    let changed = false;
+    if (typeof patch.mapId === 'string') {
+      const next = getMap(patch.mapId);
+      if (next && next.id !== this.map.id) {
+        this.map = next;
+        // 全员重新分布出生点（新图坐标系），并重置延迟补偿位置历史
+        const placed: SimFighter[] = [];
+        for (const f of this.fighters.values()) {
+          const s = pickSpawnFarthest(this.map, placed.filter((o) => o.alive));
+          f.x = s.x;
+          f.y = s.y;
+          f.respawnAt = null;
+          f.hist.length = 0;
+          f.hist.push({ t: this.time, x: f.x, y: f.y });
+          placed.push(f);
+        }
+        changed = true;
+      }
+    }
+    if (
+      (patch.difficulty === 'easy' || patch.difficulty === 'normal' || patch.difficulty === 'hard') &&
+      patch.difficulty !== this.difficulty
+    ) {
+      this.difficulty = patch.difficulty;
+      changed = true;
+    }
+    if (typeof patch.killTarget === 'number' && KILL_TARGET_OPTIONS.includes(patch.killTarget) && patch.killTarget !== this.killTarget) {
+      this.killTarget = patch.killTarget;
+      changed = true;
+    }
+    if (typeof patch.timeLimitSec === 'number' && TIME_LIMIT_OPTIONS.includes(patch.timeLimitSec) && patch.timeLimitSec !== this.timeLimitSec) {
+      this.timeLimitSec = patch.timeLimitSec;
+      changed = true;
+    }
+    if (typeof patch.botCount === 'number' && BOT_COUNT_OPTIONS.includes(patch.botCount) && patch.botCount !== this.botCount) {
+      this.botCount = patch.botCount;
+      changed = true;
+    }
+    if (changed) {
+      this.resetMatch(); // 参数即「下一局」的规则：重置计时基准，避免残留旧 matchStart
+      this.broadcastRoomInfo();
+    }
+    return changed;
+  }
+
+  /** 房主开局（FR-L8）：等待态 → 对局态；按 botCount 补齐 Bot、重置对局计时。返回是否生效 */
+  start(byId: string): boolean {
+    if (this.state !== 'waiting' || this.hostId !== byId) return false;
+    this.state = 'running';
+    this.resetMatch();
+    this.adjustBots();
+    this.emptySince = null;
+    return true;
+  }
+
   /** 再来一局（FR-M4）：kills/deaths 清零、全员重生重置；武器解锁进度（生涯计数）保留 */
   rematch(): boolean {
-    if (!this.matchOver) return false;
+    if (this.state !== 'running' || !this.matchOver) return false;
     this.matchOver = false;
     this.matchStart = this.time;
     this.lastMatchEnd = null;
@@ -271,17 +412,20 @@ export class Room {
   }
 
   /** 冲锋枪彩蛋模式口令验证（FR-E1）：对局进行中输入正确 4 位口令授予；
+   *  仅 running 态生效（NFR-5，体检修复批次 3）：等待态授予会在开局自带无限弹药；
    *  对局结束（endMatch）自动撤销，「不会带到下一局」由 rematch 后的 respawn resetAll 承接 */
   requestRush(id: string, code: unknown): boolean {
-    if (this.matchOver) return false;
+    if (this.state !== 'running' || this.matchOver) return false;
     const f = this.fighters.get(id);
     if (!f) return false;
     if (typeof code !== 'string' || code !== CHEAT_RUSH_CODE) return false;
     return f.inv.grantRush(this.time);
   }
 
-  /** 入队玩家输入（非阻塞；队列满时丢弃最旧一条——最新输入携带当前状态，不可丢弃，NFR-5 限频基线） */
+  /** 入队玩家输入（非阻塞；队列满时丢弃最旧一条——最新输入携带当前状态，不可丢弃，NFR-5 限频基线）。
+   *  等待开局态（FR-L8）直接丢弃：对局未开始，客户端也不应上报输入（防伪造预跑） */
   enqueueInput(id: string, msg: InputMsg): void {
+    if (this.state !== 'running') return;
     const q = this.inputs.get(id);
     if (!q) return;
     if (q.length >= MAX_QUEUED_INPUTS) q.shift();
@@ -301,6 +445,8 @@ export class Room {
       progress: me ? { ...me.classKills } : undefined,
       // 中途加入已结束对局（FR-M1/L7 修复）：补发最近一次结算，客户端据此弹出结算面板
       matchEnd: this.matchOver ? (this.lastMatchEnd ?? undefined) : undefined,
+      // 房间信息（FR-L8）：客户端据此进入等待界面（waiting）或直接进对局（running）
+      room: this.roomInfo(),
     };
   }
 
@@ -648,10 +794,13 @@ export class Room {
     this.fighters.set(id, this.createFighter(id, `BOT-${this.botSeq}`, true));
   }
 
-  /** Bot 填充（FR-B1）：保持 bots = min(BOT_FILL_MAX, 房容量 - 玩家数)；房间无人时清空 Bot（省 CPU，空房回收前空转） */
+  /** Bot 填充（FR-B1/L8）：保持 bots = min(botCount, 房容量 - 玩家数)；等待开局态与无人房间
+   *  不加 Bot（等待期 Bot 不加入，开局 start() 时才按房主设置的 botCount 补齐；空房省 CPU） */
   private adjustBots(): void {
     const want =
-      this.playerCount === 0 ? 0 : Math.min(BOT_FILL_MAX, ROOM_CAPACITY - this.playerCount);
+      this.state === 'waiting' || this.playerCount === 0
+        ? 0
+        : Math.min(this.botCount, ROOM_CAPACITY - this.playerCount);
     const bots = [...this.fighters.values()].filter((f) => f.bot);
     let have = bots.length;
     for (let i = bots.length - 1; i >= 0 && have > want; i--) {

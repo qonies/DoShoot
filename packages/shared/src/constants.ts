@@ -18,8 +18,10 @@ export const RESPAWN_DELAY = 2.5;
 /** 命中判定盒半边长（略大于碰撞半径，命中手感从宽） */
 export const HITBOX_HALF = 0.45;
 
-/** 网络协议版本（见 FR-N7） */
-export const PROTOCOL_VERSION = 2;
+/** 网络协议版本（见 FR-N7）：v3 = 等待房间生命周期（FR-L8）——
+ *  进房后可能停留在「等待开局」而非直接进对局，旧客户端语义不再兼容（会卡在无快照的房间），
+ *  升版让旧页面收到明确的「版本不一致，请刷新」而非静默卡死 */
+export const PROTOCOL_VERSION = 3;
 /** 服务端固定步长模拟频率（见 FR-N2） */
 export const SIM_TICK_RATE = 30;
 /** 快照广播频率下/上限（Hz）：广播间隔 = 1000/MAX（每次唤醒聚合多步事件），下限由冒烟断言校验 */
@@ -29,6 +31,9 @@ export const SNAPSHOT_RATE_MAX = 30;
 export const ROOM_CAPACITY = 10;
 /** 房间 Bot 自动填充上限（FR-B1） */
 export const BOT_FILL_MAX = 5;
+/** 房间 Bot 数量可选项（FR-L8 等待房间可调参数）：0 = 纯真人对战；默认 = BOT_FILL_MAX */
+export const BOT_COUNT_OPTIONS: readonly number[] = [0, 3, BOT_FILL_MAX];
+export const BOT_COUNT_DEFAULT = BOT_FILL_MAX;
 
 /** Bot AI 三档难度（FR-B3，大厅可选，默认中等） */
 export type BotDifficulty = 'easy' | 'normal' | 'hard';

@@ -8,6 +8,8 @@ import {
   MAPS,
   PROTOCOL_VERSION,
   getMap,
+  nextWeaponId,
+  normalizeRoomCode,
   type SnapshotMsg,
   type WelcomeMsg,
   type WeaponId,
@@ -20,6 +22,10 @@ import { Hud } from './game/hud';
 import { Net } from './game/net';
 import { sfx } from './game/audio';
 import { Minimap } from './game/minimap';
+import { WaitRoom } from './waitroom';
+import { StickControls, type TouchController } from './game/touch';
+import { PadControls } from './game/touchpad';
+import { clientToNdc, isTouchDevice } from './game/touchmath';
 import { applyAudioSettings, loadSettings, saveSettings, type GameSettings } from './settings';
 
 const NICKNAME_KEY = 'DoShoot.nickname';
@@ -27,6 +33,12 @@ const PROGRESS_KEY = 'DoShoot.progress';
 const PLAYER_ID_KEY = 'DoShoot.playerId';
 /** 上行输入发送频率（FR-N1/N2 配套） */
 const INPUT_SEND_RATE = 30;
+/** 触屏设备（FR-U6）：粗指针（手机/平板）或存在触摸面；决定摇杆/按钮与提示文案 */
+const TOUCH = isTouchDevice();
+/** 触屏瞄准距离（世界单位）：stick 模式右摇杆方向 → 玩家前方固定距离的瞄准点 */
+const TOUCH_AIM_DIST = 8;
+/** 当前触屏控制器（FR-U6 双模式，v0.3.8）：进局创建、模式切换/对局销毁时重建释放 */
+let activeTouch: TouchController | null = null;
 
 // ---------- i18n 与大厅 ----------
 applyDom();
@@ -40,15 +52,24 @@ const langBtn = document.querySelector<HTMLButtonElement>('#langBtn')!;
 let hintElRef: HTMLElement | null = null;
 function refreshLangUi(): void {
   langBtn.textContent = getLang() === 'zh' ? 'EN' : '中文';
-  if (hintElRef) hintElRef.textContent = t('hint');
+  // 触屏端按当前操作模式显示提示（pad=D-pad+点击射击 / stick=双摇杆），桌面端显示键位提示
+  if (hintElRef) hintElRef.textContent = TOUCH ? touchHintText() : t('hint');
+}
+
+/** 触屏操作提示文案按当前模式选择（FR-U6 双模式） */
+function touchHintText(): string {
+  return settings.touchMode === 'stick' ? t('hint.touch') : t('hint.pad');
 }
 refreshLangUi();
 langBtn.addEventListener('click', () => {
   toggleLang();
   refreshLangUi();
+  activeWaitroom?.refresh(); // 等待界面动态文案（房间号分享语/玩家列表/参数下拉）随语言刷新
 });
 
 const nicknameInput = document.querySelector<HTMLInputElement>('#nickname')!;
+/** 房间号输入（FR-L8）：4 位数字，回车或「加入房间」按钮触发按号进房 */
+const roomCodeInput = document.querySelector<HTMLInputElement>('#roomCode')!;
 function randomName(): string {
   return `${t('randomName')}-${Math.floor(1000 + Math.random() * 9000)}`;
 }
@@ -105,9 +126,11 @@ let connecting = false;
 let inGame = false;
 /** 当前对局循环的停止函数（断线/被拒时停止 rAF 并释放资源，防止旧循环泄漏） */
 let stopGameLoop: (() => void) | null = null;
+/** 当前等待房间界面（FR-L8）：非空 = 正在等待开局（非 connecting/inGame 的第三种状态） */
+let activeWaitroom: WaitRoom | null = null;
 
-function startGame(kind: 'quick' | 'map'): void {
-  if (connecting || inGame) return;
+function startGame(kind: 'quick' | 'map' | 'code'): void {
+  if (connecting || inGame || activeWaitroom) return;
   // 昵称校验（FR-L1：2~16 字符，与服务端 sanitizeNickname 一致）；非法则提示并中止，
   // 避免「被服务端静默改名为 P-xxxx」的无感知体验。空输入回退随机名（默认名规则）。
   const raw = nicknameInput.value.trim();
@@ -115,6 +138,16 @@ function startGame(kind: 'quick' | 'map'): void {
   if (nickname.length < 2 || nickname.length > 16) {
     showNetMsg('lobby.nameInvalid');
     return;
+  }
+  // 房间号加入（FR-L8）：客户端先行规范化校验（服务端再权威校验）
+  let roomCode: string | undefined;
+  if (kind === 'code') {
+    const code = normalizeRoomCode(roomCodeInput.value);
+    if (!code) {
+      showNetMsg('net.roomNotFound');
+      return;
+    }
+    roomCode = code;
   }
   connecting = true;
   try {
@@ -126,6 +159,15 @@ function startGame(kind: 'quick' | 'map'): void {
   showNetMsg('net.connecting');
   sfx.ensure(); // 首次用户交互初始化音频（浏览器自动播放策略，FR-S1）
 
+  // 大厅公共参数（新建/加入共用；「随机」地图 = mapId 缺省由服务端分配）
+  const lobbyParams = {
+    mapId: kind === 'quick' || mapSelect.value === 'random' ? undefined : mapSelect.value || 'range',
+    difficulty: difficultySelect.value as 'easy' | 'normal' | 'hard',
+    killTarget: Number(killTargetSelect.value),
+    timeLimitSec: Number(timeLimitSelect.value),
+    progress: loadProgress(),
+  };
+
   const net = new Net({
     onWelcome: (welcome) => {
       // FR-N7 防御：welcome 版本不匹配（join 已被服务端校验，此处兜底）按版本不一致处理
@@ -136,18 +178,41 @@ function startGame(kind: 'quick' | 'map'): void {
         showNetMsg('net.versionMismatch');
         return;
       }
+      // 等待房间（FR-L8）：建房/按房间号加入后先进入等待界面，开局时服务端重发
+      // welcome(room.state='running') 再走下方进局分支（复用全部既有进局链路）
+      if (welcome.room?.state === 'waiting') {
+        connecting = false;
+        hideNetMsg();
+        enterWaitRoom(net, welcome);
+        return;
+      }
       connecting = false;
       inGame = true;
       hideNetMsg();
+      exitWaitRoom();
       document.querySelector('#hud')!.classList.remove('hidden');
       sessionStorage.setItem(PLAYER_ID_KEY, welcome.playerId); // FR-N5 断线重连凭据
+      // 防御（体检修复批次 3）：重复 welcome 会创建第二个对局循环并覆盖 stopGameLoop，
+      // 旧 rAF/Input/TouchControls/GameScene 全部泄漏 → 进局前先停掉可能存在的旧循环
+      stopGameLoop?.();
+      stopGameLoop = null;
       stopGameLoop = runGameLoop(net, welcome);
+    },
+    onRoomUpdate: (info) => {
+      // 等待界面实时同步（FR-L8）；开局切换由 welcome 承接，此处忽略 running 态
+      if (activeWaitroom && info.state === 'waiting') activeWaitroom.update(info);
     },
     onRejected: (reason) => {
       connecting = false;
       net.close(); // 被拒后关闭连接，避免空闲 socket 泄漏（重试会新建 Net）
       backToLobby();
-      showNetMsg(reason === 'full' ? 'net.roomFull' : 'net.versionMismatch');
+      showNetMsg(
+        reason === 'full'
+          ? 'net.roomFull'
+          : reason === 'noRoom'
+            ? 'net.roomNotFound'
+            : 'net.versionMismatch',
+      );
     },
     onDisconnected: () => {
       if (inGame) {
@@ -157,6 +222,12 @@ function startGame(kind: 'quick' | 'map'): void {
         net.close(); // 阻止 socket.io 自动重连产生孤儿连接
         backToLobby(); // 修复断线死路：回大厅后 30s 宽限内重新开始可凭 rejoinId 回原对局（FR-N5）
         showNetMsg('net.disconnected');
+      } else if (activeWaitroom) {
+        // 等待房间中断线（FR-L8）：等待态服务端立即移除实体，无对局状态可恢复
+        exitWaitRoom();
+        net.close();
+        backToLobby();
+        showNetMsg('wait.disconnected');
       } else if (connecting) {
         // 建连后、welcome 前断开（如服务端恰在进房握手时重启）：socket.io 会自动重连
         // 但 join 不会重发 → 不处理会永久卡在「正在连接服务器」。按连接失败收场。
@@ -168,23 +239,50 @@ function startGame(kind: 'quick' | 'map'): void {
     },
     onConnectError: () => {
       if (inGame) return; // 对局中断线由 onDisconnected 处理
+      exitWaitRoom();
       connecting = false;
       net.close(); // 停止无限重试，允许用户修正后重试
       backToLobby();
       showNetMsg('net.connectFailed');
     },
   });
-  // 进房（FR-L3/L4/B3/N5/A1）：地图选择 / Bot 难度 / 断线重连凭据 / 武器进度基线
-  net.join({
-    version: PROTOCOL_VERSION,
-    nickname,
-    mapId: kind === 'quick' || mapSelect.value === 'random' ? undefined : mapSelect.value || 'range',
-    difficulty: difficultySelect.value as 'easy' | 'normal' | 'hard',
-    killTarget: Number(killTargetSelect.value),
-    timeLimitSec: Number(timeLimitSelect.value),
-    rejoinId: sessionStorage.getItem(PLAYER_ID_KEY),
-    progress: loadProgress(),
+  // 进房（FR-L3/L4/L7/L8/B3/N5/A1）：新建游戏 → createRoom（等待房间）；
+  // 快速加入 / 房间号加入 → join（后者携带规范化后的 roomCode）
+  if (kind === 'map') {
+    net.createRoom({ version: PROTOCOL_VERSION, nickname, ...lobbyParams });
+  } else {
+    net.join({
+      version: PROTOCOL_VERSION,
+      nickname,
+      ...lobbyParams,
+      rejoinId: sessionStorage.getItem(PLAYER_ID_KEY),
+      ...(roomCode !== undefined ? { roomCode } : {}),
+    });
+  }
+}
+
+/** 进入等待房间界面（FR-L8）：每次进入新建 WaitRoom 实例，退出时 dispose（防监听器叠加） */
+function enterWaitRoom(net: Net, welcome: WelcomeMsg): void {
+  exitWaitRoom();
+  activeWaitroom = new WaitRoom({
+    onStart: () => net.startMatch(),
+    onLeave: () => {
+      // 主动离开等待房间：与对局内「返回大厅」同语义（服务端立即移除，不走断线宽限）
+      exitWaitRoom();
+      net.sendLeave();
+      net.close();
+      sessionStorage.removeItem(PLAYER_ID_KEY);
+      backToLobby();
+    },
+    onSettingsChange: (patch) => net.updateRoom(patch), // 服务端白名单 + 房主校验后广播回流
   });
+  activeWaitroom.show(welcome.room!, welcome.playerId);
+}
+
+/** 退出等待房间界面（释放事件监听；backToLobby 前调用） */
+function exitWaitRoom(): void {
+  activeWaitroom?.dispose();
+  activeWaitroom = null;
 }
 
 function backToLobby(): void {
@@ -193,12 +291,27 @@ function backToLobby(): void {
   for (const id of ['settings', 'scoreboard', 'settlement', 'respawn', 'unlockBanner']) {
     document.querySelector(`#${id}`)!.classList.add('hidden');
   }
+  syncTouchUiVisibility(); // 面板全关 → 恢复触屏按钮（body.ui-open 复位）
+  document.body.classList.remove('in-game', 'pad'); // 对局手势作用域与 pad 模式布局复位
+  exitWaitRoom(); // 等待房间界面（FR-L8）：释放事件监听并隐藏
   document.querySelector('#lobby')!.classList.remove('hidden');
   document.querySelector('#hud')!.classList.add('hidden');
 }
 
+/** 设置/结算面板开关状态 → body.ui-open（体检修复批次 3）：
+ *  #touchControls（z-index 8）在 #hud（z-index 5，面板是其子元素）之外，不隐藏会压在面板上
+ *  并吞掉角落点击；面板打开期间隐藏触屏按钮，关闭路径由 #setClose 与设置面板遮罩点击承接 */
+function syncTouchUiVisibility(): void {
+  document.body.classList.toggle('ui-open', Input.isGameInputBlocked());
+}
+
+// 大厅入口（FR-L8）：新建游戏 → 等待房间；快速加入 → 自动匹配；加入房间 → 按房间号进房
 document.querySelector('#start')!.addEventListener('click', () => startGame('map'));
 document.querySelector('#quickJoin')!.addEventListener('click', () => startGame('quick'));
+document.querySelector('#joinRoom')!.addEventListener('click', () => startGame('code'));
+roomCodeInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') startGame('code');
+});
 nicknameInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') startGame('map');
 });
@@ -211,6 +324,8 @@ const volumeSlider = document.querySelector<HTMLInputElement>('#setVolume')!;
 const bgmSlider = document.querySelector<HTMLInputElement>('#setBgm')!;
 const qualitySel = document.querySelector<HTMLSelectElement>('#setQuality')!;
 const langSel = document.querySelector<HTMLSelectElement>('#setLang')!;
+/** 触屏操作模式（FR-U6 双模式，v0.3.8）：仅触屏设备显示（CSS body:not(.touch) 隐藏） */
+const touchModeSel = document.querySelector<HTMLSelectElement>('#setTouchMode')!;
 /** 当前对局的场景引用：进局赋值、退出置空（画质分档即时生效用） */
 let activeScene: GameScene | null = null;
 function syncSettingsUi(): void {
@@ -218,14 +333,31 @@ function syncSettingsUi(): void {
   bgmSlider.value = `${Math.round(settings.bgm * 100)}`;
   qualitySel.value = settings.quality;
   langSel.value = getLang();
+  touchModeSel.value = settings.touchMode;
 }
 syncSettingsUi();
-window.addEventListener('keydown', (e) => {
-  if (e.key !== 'Escape' || !inGame) return;
+/** 打开/关闭设置面板（Esc 与触屏「设置」按钮共用，FR-U6） */
+function toggleSettingsPanel(): void {
   syncSettingsUi();
   settingsEl.classList.toggle('hidden');
+  syncTouchUiVisibility(); // 面板打开期间隐藏触屏按钮（body.ui-open）
+}
+window.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || !inGame) return;
+  toggleSettingsPanel();
 });
-document.querySelector('#setClose')!.addEventListener('click', () => settingsEl.classList.add('hidden'));
+document.querySelector('#setClose')!.addEventListener('click', () => {
+  settingsEl.classList.add('hidden');
+  syncTouchUiVisibility();
+});
+// 点设置面板遮罩（面板外）关闭（体检修复批次 3）：触屏端小屏下 #setClose 可能被裁切，
+// 遮罩点击提供始终可用的关闭路径（桌面端同样生效，与常见面板交互一致）
+settingsEl.addEventListener('pointerdown', (e) => {
+  if (e.target === settingsEl) {
+    settingsEl.classList.add('hidden');
+    syncTouchUiVisibility();
+  }
+});
 volumeSlider.addEventListener('input', () => {
   settings.volume = Number(volumeSlider.value) / 100;
   applyAudioSettings(settings);
@@ -245,9 +377,32 @@ langSel.addEventListener('change', () => {
   setLang(langSel.value as 'zh' | 'en'); // i18n 模块持久化 + applyDom（含小地图外的全部 data-i18n）
   refreshLangUi(); // 按钮标签/操作提示不走 data-i18n，需手动刷新
 });
+touchModeSel.addEventListener('change', () => {
+  settings.touchMode = touchModeSel.value === 'stick' ? 'stick' : 'pad';
+  saveSettings(settings);
+  recreateTouchControls(); // 热切换：销毁旧控制器并按新模式重建（不重建场景，操作提示随之刷新）
+});
+
+// ---------- 触屏控制器（FR-U6 双模式，v0.3.8） ----------
+/** 按当前设置创建触屏控制器：pad = D-pad + 点击射击（默认）/ stick = 双虚拟摇杆 */
+function createTouchController(): TouchController {
+  const callbacks = { onSettings: () => toggleSettingsPanel() };
+  return settings.touchMode === 'stick' ? new StickControls(callbacks) : new PadControls(callbacks);
+}
+
+/** （重）建触屏控制器：进局/模式切换时调用；销毁旧的防监听器与 DOM 叠加。
+ *  body.pad 驱动 pad 模式的 HUD 避让布局（血条移至底部中央等）；body.touch 由控制器自管 */
+function recreateTouchControls(): void {
+  activeTouch?.destroy();
+  activeTouch = null;
+  document.body.classList.toggle('pad', settings.touchMode !== 'stick');
+  if (TOUCH && inGame) activeTouch = createTouchController();
+  if (hintElRef) hintElRef.textContent = TOUCH ? touchHintText() : t('hint');
+}
 
 // ---------- 联机对局主循环 ----------
 function runGameLoop(net: Net, welcome: WelcomeMsg): () => void {
+  document.body.classList.add('in-game'); // 对局手势作用域（#game touch-action:none，iOS 手势加固）
   const canvas = document.querySelector<HTMLCanvasElement>('#game')!;
   const map = getMap(welcome.mapId) ?? DEFAULT_MAP;
   let gameScene: GameScene;
@@ -282,7 +437,10 @@ function runGameLoop(net: Net, welcome: WelcomeMsg): () => void {
       saveProgress(p);
     },
     // FR-M4/L7：结算面板 + 再来一局/返回大厅（killTarget 供「达到 X 杀」文案）
-    onMatchEnd: (reason, standings, kt) => hud.showSettlement(reason, standings, world.selfId, kt),
+    onMatchEnd: (reason, standings, kt) => {
+      hud.showSettlement(reason, standings, world.selfId, kt);
+      syncTouchUiVisibility(); // 结算面板打开期间隐藏触屏按钮
+    },
     onMatchReset: () => hud.hideSettlement(),
     // FR-E1：冲锋枪彩蛋模式激活 → 全屏提示（服务端口令验证通过后的快照回调）
     onRushActivated: () => {
@@ -293,10 +451,13 @@ function runGameLoop(net: Net, welcome: WelcomeMsg): () => void {
   // 中途加入已结束对局（FR-M1/L7 修复）：服务端经 welcome.matchEnd 补发结算面板
   if (welcome.matchEnd) world.adoptMatchEnd(welcome.matchEnd);
   const input = new Input(canvas);
+  // 触屏虚拟控制（FR-U6 双模式）：按设置创建（默认 pad = D-pad+点击射击）；随对局销毁/热切换重建
+  recreateTouchControls();
   const aim = new THREE.Vector2();
+  aim.set(world.local.x, world.local.y - TOUCH_AIM_DIST); // 默认朝上；pad 模式首次点击前保持
 
   const hintEl = document.querySelector<HTMLElement>('#hint')!;
-  hintEl.textContent = t('hint');
+  hintEl.textContent = TOUCH ? touchHintText() : t('hint');
   hintElRef = hintEl; // 语言切换时同步刷新（refreshLangUi）
   const fpsEl = document.querySelector<HTMLElement>('#fps')!;
 
@@ -317,11 +478,13 @@ function runGameLoop(net: Net, welcome: WelcomeMsg): () => void {
   // 结算面板按钮（FR-M4）
   const onRematch = (): void => {
     hud.hideSettlement();
+    syncTouchUiVisibility(); // 面板关闭 → 恢复触屏按钮
     net.sendRematch();
   };
   const onLeave = (): void => {
     hud.hideSettlement();
     hud.hideScoreboard();
+    syncTouchUiVisibility();
     // 主动离开：先落本地状态再关连接，避免 disconnect 回调误报「连接已断开」并重复清理
     inGame = false;
     stopGameLoop?.();
@@ -347,7 +510,28 @@ function runGameLoop(net: Net, welcome: WelcomeMsg): () => void {
     last = now;
 
     const cmd = input.consumeCommands();
-    gameScene.screenToGround(input.mouseNdcX, input.mouseNdcY, aim);
+    // 触屏指令合并（FR-U6 双模式）：方向/摇杆覆盖移动、开火沿/换弹/切枪补充（键盘在触屏端不存在，直接覆盖安全）
+    const tcmd = activeTouch?.consume() ?? null;
+    if (tcmd) {
+      cmd.moveX = tcmd.moveX;
+      cmd.moveY = tcmd.moveY;
+      cmd.firing = cmd.firing || tcmd.firing;
+      if (tcmd.firePressed) cmd.firePressed = true;
+      if (tcmd.reload) cmd.reload = true;
+      if (tcmd.switchNext) cmd.switchTo = nextWeaponId(world.inv.current, 1); // 循环切换（与滚轮同源）
+    }
+    // 瞄准（FR-U6 双模式）：stick = 玩家位置 + 摇杆方向 × 固定距离；pad = 点击/拖动的屏幕位置
+    // 投影到地面世界点（精度等同鼠标）；none = 本帧无触屏瞄准输入（保持上一帧瞄准点）；
+    // 桌面 = 鼠标 NDC 投影到地面
+    const taim = activeTouch?.getAim() ?? null;
+    if (taim?.kind === 'client') {
+      const ndc = clientToNdc(taim.x, taim.y, window.innerWidth, window.innerHeight);
+      gameScene.screenToGround(ndc.x, ndc.y, aim);
+    } else if (taim?.kind === 'dir') {
+      aim.set(world.local.x + taim.x * TOUCH_AIM_DIST, world.local.y + taim.y * TOUCH_AIM_DIST);
+    } else if (taim === null) {
+      gameScene.screenToGround(input.mouseNdcX, input.mouseNdcY, aim);
+    }
     // 冲锋枪彩蛋模式口令上报（FR-E1）：客户端校验通过后由服务端权威授予
     if (cmd.cheatRush) net.sendRush(CHEAT_RUSH_CODE);
     world.update(dt, cmd, aim.x, aim.y);
@@ -372,11 +556,15 @@ function runGameLoop(net: Net, welcome: WelcomeMsg): () => void {
     );
     hud.setKills(world.local.kills);
     hud.setMatchTimer(world.matchTimeLeft);
-    if (hudTabDown()) hud.showScoreboard(world.lastEntities, world.selfId);
+    if (hud.scoreboardVisible) hud.showScoreboard(world.lastEntities, world.selfId);
     const moving = cmd.moveX !== 0 || cmd.moveY !== 0;
+    // 准星定位：触屏 = 瞄准点投影到屏幕（stick=摇杆方向点 / pad=点击处）；桌面 = 跟随鼠标（FR-U1/U6）
+    const cross = activeTouch
+      ? gameScene.worldToScreen(aim.x, aim.y)
+      : { x: input.mouseClientX, y: input.mouseClientY };
     hud.setCrosshair(
-      input.mouseClientX,
-      input.mouseClientY,
+      cross.x,
+      cross.y,
       5 + world.recoilBloom * 1.8 + (moving ? spec.moveSpreadDeg * 1.2 : 0),
       world.local.alive,
     );
@@ -404,16 +592,14 @@ function runGameLoop(net: Net, welcome: WelcomeMsg): () => void {
 
   requestAnimationFrame(frame);
 
-  /** 按住 Tab 期间持续刷新计分板数据（keydown 只在可见性切换时重建） */
-  function hudTabDown(): boolean {
-    return document.querySelector<HTMLDivElement>('#scoreboard')!.classList.contains('hidden') === false;
-  }
-
   /** 停止循环并释放本局资源（断线/销毁时调用） */
   return () => {
     running = false;
     activeScene = null;
     input.destroy();
+    activeTouch?.destroy(); // 触屏控制器随对局销毁（FR-U6 双模式）
+    activeTouch = null;
+    document.body.classList.remove('in-game');
     gameScene.dispose();
     window.removeEventListener('keydown', onTabDown);
     window.removeEventListener('keyup', onTabUp);

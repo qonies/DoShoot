@@ -1,7 +1,54 @@
 # 活动上下文（Active Context）
 
 ## 当前焦点
-**v0.3.4 体检修复批次 2 已落地（2026-10-24）**：滚轮切枪同步服务端 / 空房复用与「加入已结束房间」修复 / C2S `leave` 主动离开语义 / rematch 不复活断线者，另修 6 项 P2/P3——待局域网多设备实测验收。
+**v0.3.9 头顶血条已落地（2026-10-29）**：每个玩家/Bot 头顶悬浮实时血板（本地=预测血量每帧、远端=快照血量 ~28Hz，分段变色、死亡隐藏）——**iOS Safari 真机实测仍待验收**（上一迭代 v0.3.8 触屏双操作模式已落地）。
+
+## 最近变更（2026-10-29 · 头顶血条，v0.3.9）
+- **实现**：`game/entities.ts`——新增 `HealthBar`（底板 1.1×0.16 深色 + 填充板 1.02×0.10，`PlaneGeometry.translate` 左端锚定 → `scale.x = hp%`；俯仰角 `HP_BAR_TILT = -atan2(22,12)` 与 GameScene 相机（y=22/z+12）匹配正对视角）；`syncHealthBar()` 宽度/颜色仅在变化时改写（阈值 0.004 / 分段 >55 绿 0x4caf50、26~55 橙 0xffb74d、≤25 红 0xe57373）
+- **悬浮高度 1.8**（反馈调整：1.45 会视觉压到角色）——明显高于身体顶部 ~1.32 不遮挡玩家；也高于墙高 1.6 → 掩体后血板浮现在墙顶上方（顶视角惯例，墙后不再遮挡血板）
+- **倒计时移位（反馈调整）**：`#matchTimer` 顶部中央 → **右上角**（原与击杀数 topbar/头顶血板重叠）；`#killfeed` 移至其下方（top 42px）；触屏端倒计时左移避让右上角设置按钮（`right: 64px + safe-area`）、击杀流 `top: 58px + safe-area`
+- **数据源**：本地玩家 = `LocalPlayer.hp`（快照和解写入，`sync()` 每帧刷新位置+血条）；远端/Bot = `RemoteEntity.hp`（`applySnapshot` ~28Hz 刷新，`render()` 插值位置随动）；死亡隐藏（`alive && hp>0`）；`RemoteEntity.dispose` 深度释放血板（`disposeHealthBar`）；对局结束时 `GameScene.dispose` 全场景兜底释放
+- **边界**：服务端与协议零改动（血量已在 EntitySnapshot）；本地满血也显示（不做满血隐藏）；`scale.x` 钳 0.0001 防零缩放退化矩阵
+- 验证：typecheck / unit 145 / check:i18n（106 键）/ smoke:net ALL PASS / build（gzip 155.76KB）全过；**视觉效果待浏览器实测**
+
+## 最近变更（2026-10-29 · FR-U6 双操作模式，v0.3.8）
+- **pad 模式（默认）**：新 `game/touchpad.ts`（`PadControls`）——左下 D-pad 四向键（`Map<pointerId, dir>` 多点触控，相邻两键同按=斜向，滑出键位不换向）+ 点击/按住屏幕瞄准射击（轻点 1 发 / 按住连发 / 拖动微调；瞄准点 = 点击位置 sticky）+ 换弹/切枪/设置按钮（无开火键）；D-pad 区域空隙点击不误射（`closest('button, #dpad, …')`）
+- **stick 模式（可选）**：`game/touch.ts` 类更名 `StickControls` 并实现统一契约 `TouchController`（`consume()/getAim(): TouchAim(dir|client|none)/destroy()`）；`createTouchButton` 按钮构建双模式共用
+- **模式切换**：`settings.touchMode: 'pad'|'stick'`（默认 pad，localStorage 持久化）；设置面板新增下拉（`#setTouchMode`，仅触屏显示）；`main.ts recreateTouchControls()` 局内热切换（销毁重建控制器，`body.pad` 驱动 HUD 避让布局）；hint 文案按模式选择（`hint.pad`/`hint.touch`）
+- **iOS 手势加固（修「双指误缩放」，两模式共用）**：新 `game/gestures.ts` `installGestureGuards()`——window 层双指及以上 touchstart/touchmove 非被动拦截 + gesturestart/change/end 全拦；CSS 对局中（`body.in-game`）`#game` 加 `touch-action:none`（**不加 body/html**，防祖先链交集禁用面板滚动）；`user-scalable=no` 在 iOS 10+ 被忽略是根因
+- **main.ts 接线**：`activeTouch` 模块级控制器引用；frame 内 `getAim()` 三分支（client→NDC→screenToGround / dir→自身+方向×8 / none→保持上一帧）；准星统一 `worldToScreen(aim)`；aim 初始为自身上方 8 单位
+- **HUD 避让（pad）**：血条移底部中央、换弹/切枪右缘竖排、D-pad 左下安全区适配 + 小屏缩小（CSS 追加段）
+- **i18n**：+8 键（`set.touchMode`/`touch.modePad`/`touch.modeStick`/`hint.pad`/`touch.up|down|left|right`），98→106 键
+- **测试**：unit 132→**145**（`dpadVector` 四向/斜向 1/√2/对向抵消/零输入、`clientToNdc` 中心/四角/零尺寸）；服务端与协议零改动（pad 输入经既有 InputMsg 管线）
+- 验证：typecheck / unit 145 / check:i18n（106 键）/ smoke:net ALL PASS / build（gzip 155.37KB）全过；**待 iOS Safari 真机实测**（双指不缩放、D-pad 手感、点击射击方向与按住连发、模式热切换、面板滚动不受手势加固影响）
+- ⚠️ 教训：PowerShell 5.1 `Set-Content` 默认 ANSI 编码会把 UTF-8 中文写坏（root package.json description 曾乱码，已用 `[IO.File]::WriteAllText + UTF8Encoding(false)` 修复）——后续脚本写含中文文件必须显式 UTF-8
+
+## 最近变更（2026-10-29 · 体检修复批次 3，v0.3.7）
+- **P1 冒烟假失败修复**：`smoke:net` 彩蛋断言此前用 `waitForAlive`（每轮「先活后死」检查先于谓词），测试角色被 Bot 击杀时把「已授予但恰好死亡」误判为失败（实测 3 跑 1 败）→ 改用新增的不感知死亡 `waitFor`（彩蛋跨重生保留，死亡不影响断言）
+- **P1 触屏小屏适配（FR-U6 验收前必修）**：`#settings/#settlement .panel` 纳入小屏媒体查询（≤640px 宽或 ≤620px 高：`width:min(420px,100vw-20px)` + `max-height:calc(100dvh-20px)` + `overflow-y:auto`，面板自身允许滚动）——此前 iPhone 横屏下面板溢出、`#setClose`/结算按钮可能被裁出屏幕；设置面板新增**遮罩点击关闭**（触屏始终可用的关闭路径）；面板打开期间经 `body.ui-open`（main.ts `syncTouchUiVisibility`，随 toggleSettingsPanel/setClose/遮罩/onMatchEnd/onRematch/onLeave/backToLobby 同步）隐藏 `#touchControls`（其 z-index 8 在 #hud 5 之外，否则压在面板上并吞角落点击）
+- **P2 服务端**：① `RoomManager.newCode()` 兜底由「5 位序号」改为**确定性 4 位扫描**并接入 `ROOM_CODE_LENGTH`（原兜底号会被 `normalizeRoomCode` 拒绝=无法加入）；② `Room.requestRush` 增加 `state==='running'` 守卫（原等待房间可提前激活彩蛋 → 开局自带无限弹药，NFR-5）；③ join 处理顺序调整：**显式 `roomCode` 优先于 `rejoinId`**（主动输入房间号不再被 30s 残留凭据拉回上一局）
+- **P3 客户端**：① rush 放弃防闪烁改「服务端确认窗口」——`switchAckPending/switchAckAt`（上报后 1s 内旧快照 rush=true 不回授，确认/死亡/复活/matchReset 即解除），替代原先仅 ~33ms 的 `pendingSwitch` 门控（消除重复横幅/音效闪烁）；② `onWelcome` 进局前先 `stopGameLoop?.()`（重复 welcome 不再泄漏双 rAF/Input/TouchControls/Scene）；③ 右摇杆旋钮视觉钳制到基座半径（与左摇杆同规则）；④ `isTouchDevice()` 收紧：`ontouchstart` 回退分支需 `maxTouchPoints>0` 且**非** `hover:hover + pointer:fine`（触屏笔记本不再误显示虚拟按钮）；⑤ `#roomCode` maxlength 4→7（允许 `48-21` 等可规范化输入）；⑥ HUD 计分板帧判读改 `hud.scoreboardVisible` getter（去每帧 querySelector）
+- **测试体系重构**：`RoomManager` + `sanitizeRule/sanitizeSettings` 从 `index.ts` 抽出至 **`apps/server/src/rooms.ts`**，`index.ts` 与 `scripts/net-smoke.ts` **同源复用**——冒烟不再用「同语义最小子集」复制路由，选房/房间号/容量/白名单校验的漂移从此可被检出（smoke 的 roomFor/hostedRooms/createWaitingRoom 已删除，改用真实 pick/findByCode/createRoom/findRejoinable/destroyAll）
+- 新增单测 2 项（130→**132**）：等待态彩蛋口令被拒 / 开局后可授予；验证：typecheck / unit 132 / check:i18n（98 键）/ **smoke:net×3 ALL PASS（真实 RoomManager）** / smoke:server / build（gzip 154.07KB）全过
+
+## 最近变更（2026-10-29 · FR-U6 触屏操作，v0.3.6）
+- **控制方案**：浮动双虚拟摇杆——左半屏触点即移动摇杆圆心（等效 WASD 归一化向量），右半屏拖动 = 瞄准（方向松手保持，等效鼠标）；动作按钮：开火（大圆，按住连发 + 按下沿）/ 换弹 / 切枪（循环 nextWeaponId）/ 设置（等效 Esc，触屏用户原本无法打开仅 Esc 的设置面板）；按钮/摇杆适配刘海安全区 `env(safe-area-inset-*)`
+- **新模块**：`game/touchmath.ts`（纯函数 `stickVector`：钳制/归一化/死区 14px/平滑起步 + `isTouchDevice()`：`(pointer: coarse)` 判定——iPadOS 桌面模式 UA 伪装成 macOS 仍可识别；零依赖可单测）+ `game/touch.ts`（TouchControls：window 级 PointerEvent 采集仅 `pointerType==='touch'`、浮动摇杆可视化、按钮 pointerdown/up + stopPropagation 防误触摇杆、面板打开期间经 `Input.isGameInputBlocked()` 屏蔽（该方法由 private 改 public）、destroy 成对移除随对局销毁）
+- **main.ts 集成**：TOUCH 常量模块级判定；`runGameLoop` 内触屏创建/销毁；每帧合并 `touch.consume()` → cmd（摇杆覆盖 move、按钮补 firing/firePressed/reload/switchNext）；瞄准分支：触屏 = `world.local + aimDir × 8` 世界单位（跳过 screenToGround），准星改经 `gameScene.worldToScreen(aim)` 投影定位（桌面仍跟随鼠标）；提示文案 `hint.touch`；Esc 开关抽为 `toggleSettingsPanel()` 与触屏设置按钮共用
+- **viewport/手势/CSS**：meta `user-scalable=no + viewport-fit=cover` + apple-mobile-web-app 系列；`#hud { touch-action: none }`（大厅/面板保持可滚动）、`gesturestart` preventDefault（iOS 捏合）、`overscroll-behavior: none`、`#game { height: 100dvh }`（@supports 回落 100vh）；`body.touch` 类 + 小屏媒体查询（≤640px 宽或 ≤620px 高：大厅/等待面板限宽限高可滚动、小地图 100px、隐藏 FPS/键位提示、触屏提示置顶）
+- **测试**：`unit` 122→**130 项**（stickVector 8 项：满程/斜向钳制/半程平滑/死区/零半径安全/方向约定）；服务端与协议**零改动**（触屏指令经既有 InputMsg 管线）
+- **已知限制（FR-U6 明示）**：冲锋枪彩蛋口令（键盘 4 位数字）无触屏入口；HUD 密度按 iPhone 横屏/iPad 优化，手机竖屏可用未深度布局
+- 验证：`unit` 130 全过 / `typecheck` 全过 / `check:i18n` OK（98 键）/ `smoke:net` ALL PASS / `smoke:server` 通过 / `build` 成功（gzip 153.9KB，59 modules）；**待 iOS Safari 真机实测**（双摇杆手感、瞄准持续、安全区、Safari 地址栏收展、音频首交互解锁）
+
+## 最近变更（2026-10-29 · FR-L8 等待房间与房间号，v0.3.5）
+- **玩法**：大厅「开始游戏」改为「**新建游戏**」（createRoom）→ 服务端建房 `state='waiting'` + 随机 4 位数字房间号（RoomManager `newCode()`，1000~9999 撞号重试）→ 等待界面（`#waitroom`，新 `waitroom.ts`）：大字房间号（局域网 http 非安全上下文无 clipboard API，仅展示可选中）、玩家列表（房主徽章 + 你标记）、人数 n/10；**房主可调参数**：地图/Bot 难度/击杀目标/时限/Bot 数量（`BOT_COUNT_OPTIONS=[0,3,5]`），非房主下拉禁用只读；大厅新增「房间号输入 + 加入房间」（回车可触发）。房主「开始游戏」（startMatch）→ 服务端转 running、按 botCount 补 Bot、**向房内每 socket 重发 `welcome(room.state='running')`** → 客户端 onWelcome 复用全部既有进局链路（零新进局代码）
+- **shared**：新 `roomCode.ts`（`ROOM_CODE_LENGTH=4` + `normalizeRoomCode` 前后端同源校验）；`PROTOCOL_VERSION` 2→**3**（升版原因：房间生命周期语义变更，旧客户端会卡在无快照的房间，v3 让其收到明确版本不一致提示）；协议新增 C2S `CreateRoomMsg`/`RoomSettingsMsg`（updateRoom）/`startMatch`（无载荷）+ S2C `roomUpdate`（`RoomInfoMsg`：code/hostId/state/mapId/difficulty/killTarget/timeLimitSec/botCount/capacity/players）+ `JoinMsg.roomCode?`/`botCount?` + `WelcomeMsg.room?` + `JoinRejectReason+'noRoom'`；constants 新增 `BOT_COUNT_OPTIONS`/`BOT_COUNT_DEFAULT`
+- **服务端**：`Room` 新增 `code/hostId/state`、可变 `map`（getter mapId）与 `difficulty/killTarget/timeLimitSec/botCount`；`roomInfo()/broadcastRoomInfo()/updateSettings()/start()`；**waiting 态不步进不广播**（runFrame 早退，同空房省 CPU）、`enqueueInput` 丢弃、断线即移除（模拟时钟冻结使 30s 宽限失效）、`adjustBots` waiting 恒 0 / running 按 `min(botCount, 余量)`；换地图时全员按新图 `pickSpawnFarthest` 重置出生点并清位置历史（防延迟补偿按旧图坐标回溯）；房主离开/断线 `removePlayer` 移交下一位真人；`rematch` 加 `state==='running'` 守卫。`RoomManager` 新增 `newCode()/findByCode()/createRoom()`，`pick()` 建房 autoStart=true（快速加入保持秒进对局）；`index.ts` 新增 `createRoom/updateRoom/startMatch` 路由（白名单 `sanitizeSettings`，非房主/非等待态静默忽略，NFR-5）
+- **客户端**：新 `waitroom.ts`（WaitRoom 类：show/update/refresh/hide/dispose，事件成对绑定防叠加，下拉与大厅同源常量数据驱动）；`main.ts` `startGame(kind: 'quick'|'map'|'code')` 三入口 + `onWelcome` 按 `welcome.room.state` 分流（waiting→enterWaitRoom / running→进局）+ `onRoomUpdate` 同步 + `onRejected 'noRoom'`；等待态断线提示 `wait.disconnected`；`backToLobby` 统一 `exitWaitRoom()`；`net.ts` 新增 `createRoom/updateRoom/startMatch/onRoomUpdate`
+- **i18n**：新增 15 键（`createRoom/joinRoom/roomCode/botCount/bots.0|3|5/wait.title|code|share|players|host|you|start|leave|readonly|disconnected/net.roomNotFound`，76→93 键）；`#start` 文案键 `start`→`createRoom`
+- **测试**：`unit` 98→**122 项**（normalizeRoomCode 6 + 等待房间状态机 16：waiting 冻结/房主权限/白名单过滤/换图重置出生点/开局补 Bot/房主移交）；`smoke:net` 新增 5 步（8 等待房无快照无 Bot / 9 房间号加入 / 10 非房主调参被拒+房主改图广播 / 11 开局重发 welcome+快照恢复 / 12 非法房间号 noRoom）
+- **注意**：既有 Room 单测/冒烟建房全部需传 `autoStart=true`（第 9 参），否则房间停在 waiting 态不步进（本次已同步修正 unit-check/net-smoke/load-test 走 join 自动开局不受影响）
+- 验证：`unit` 122 全过 / `typecheck` 全过 / `check:i18n` OK（93 键）/ `smoke:net` ALL PASS（含新 5 步）/ `smoke:server` 通过（protocol v3）/ `build` 成功（gzip 152.1KB）/ `loadtest`（10 客户端×10s）PASS（快照 28.6/s，0 断线）
 
 ## 最近变更（2026-10-24 · v0.3.4 体检修复批次 2）
 - **P1 滚轮切枪从不同步服务端（已修复）**：`world.ts` 的 buildInput 只上报数字键的 switchTo，滚轮仅本地 `inv.cycle` → ~250ms 后被权威 weaponId 和解「切回」（rush 模式还会出现授予/撤销闪烁）。shared 新增 `nextWeaponId(current, delta)`（`WeaponInventory.cycle` 同源复用），`handleSwitchAndReload` 把滚轮/数字键统一折算为 `pendingSwitch` 持有至下次 buildInput 上报（顺带修复帧率高于上行 30Hz 时切枪指令丢失）；`syncRush` 在 pendingSwitch 非空时不回授 rush
@@ -132,7 +179,7 @@
 - M1 单机战斗核心完成：shared 武器数值表、客户端战斗层（fighter/weapons/combat/bot/world/hud）、HP/死亡/重生、完整 HUD、基础 Bot；FR-W4 M1 约定（携带全部 6 类）已升 v0.2.3
 
 ## 下一步
-1. 局域网多设备实测验收（M4 + v0.3.4 验收项）：60 FPS、双机开黑、平衡性反馈与数值调参；专项回归：滚轮切枪（含 rush 模式中放弃）、打完一局后「返回大厅」→ 新开一局、结算弹出期间新玩家加入可见结算面板、设置/结算面板打开期间按键无响应、断线 30s 内重连回原局
+1. 局域网多设备实测验收（M4 + v0.3.4/v0.3.5/v0.3.6 验收项）：60 FPS、双机开黑体验、平衡性反馈与数值调参；专项回归：**iOS Safari 真机触屏全流程（大厅→建房/房间号加入→等待房→对局：双摇杆移动瞄准、按钮开火换弹切枪、设置面板、安全区与视口）、桌面端回归（鼠标键盘零影响）、等待房间全流程（新建游戏→房间号加入→房主调参→开局）、房主离开后房主移交、快速加入落入等待房、滚轮切枪（含 rush 模式中放弃）、打完一局后「返回大厅」→ 新开一局、结算弹出期间新玩家加入可见结算面板、设置/结算面板打开期间按键无响应、断线 30s 内重连回原局**
 2. 待确认增强（未做）：Bot 切枪与全自动武器开火支持（当前 Bot 恒用手枪；若做需同时改 `bot.ts` 的 `f.input.firing`）
 3. V2（TDM/Hardpoint、账号与战绩、反作弊加固、更多地图武器，见需求 §1.2）；rejoinId 冒名接管与玩家间碰撞已记入 V2/决策待定
 

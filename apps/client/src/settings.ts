@@ -11,10 +11,14 @@ export interface GameSettings {
   /** BGM 音量 0..1（FR-S3 独立控制） */
   bgm: number;
   quality: QualityLevel;
+  /** 触屏操作模式（FR-U6，v0.3.8）：pad = D-pad + 点击射击（默认）；stick = 双虚拟摇杆 */
+  touchMode: TouchMode;
 }
 
+export type TouchMode = 'pad' | 'stick';
+
 const KEY = 'DoShoot.settings';
-const DEFAULTS: GameSettings = { volume: 0.5, bgm: 0.3, quality: 'high' };
+const DEFAULTS: GameSettings = { volume: 0.5, bgm: 0.3, quality: 'high', touchMode: 'pad' };
 
 export function loadSettings(): GameSettings {
   try {
@@ -30,6 +34,7 @@ export function loadSettings(): GameSettings {
         raw.quality === 'low' || raw.quality === 'medium' || raw.quality === 'high'
           ? raw.quality
           : DEFAULTS.quality,
+      touchMode: raw.touchMode === 'stick' ? 'stick' : 'pad',
     };
   } catch {
     return { ...DEFAULTS };

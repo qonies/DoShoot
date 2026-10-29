@@ -11,60 +11,111 @@ import {
   PROTOCOL_VERSION,
   SNAPSHOT_RATE_MAX,
   SNAPSHOT_RATE_MIN,
+  normalizeRoomCode,
   type InputMsg,
+  type RoomInfoMsg,
   type SnapshotMsg,
   type WelcomeMsg,
 } from '@DoShoot/shared';
-import { Room } from '../apps/server/src/room';
+import type { Room } from '../apps/server/src/room';
+import { RoomManager, sanitizeRule, sanitizeSettings } from '../apps/server/src/rooms';
 
 /** 端口由系统分配（listen(0)，回调内赋值）——防并行运行或残留进程占用固定端口导致 EADDRINUSE */
 let PORT = 0;
 const httpServer = createServer(() => {});
 const io = new Server(httpServer, { cors: { origin: true } });
-/** 房间按「地图 + 对局生命周期规则」惰性创建（与 index.ts RoomManager 同语义的最小子集，FR-MP2/L3/L7） */
-const rooms = new Map<string, Room>();
+/** 房间管理：与 index.ts 同源复用真实 RoomManager + 载荷白名单校验（体检修复批次 3）。
+ *  此前冒烟用「与 index.ts 同语义的最小子集」复制路由，选房/房间号/校验的漂移不会被检出 */
+const roomManager = new RoomManager(io);
 const sessions = new Map<string, Room>();
-function roomFor(mapId: string | undefined, killTarget: number, timeLimitSec: number): Room {
-  const id = mapId && MAPS[mapId] ? mapId : 'range';
-  const key = `${id}:${killTarget}:${timeLimitSec}`;
-  let r = rooms.get(key);
-  if (!r) {
-    r = new Room(io, MAPS[id]!, `smoke-${key}`, 'normal', killTarget, timeLimitSec);
-    rooms.set(key, r);
-  }
-  return r;
-}
 
 io.on('connection', (socket) => {
   let joined = false;
-  socket.on('join', (raw: { version: number; nickname: string; mapId?: string; rejoinId?: string; killTarget?: number; timeLimitSec?: number }) => {
+  socket.on('join', (raw: { version: number; nickname: string; mapId?: string; rejoinId?: string; killTarget?: number; timeLimitSec?: number; roomCode?: string }) => {
     if (!raw || raw.version !== PROTOCOL_VERSION) {
       socket.emit('joinRejected', { reason: 'version' });
       return;
     }
-    // FR-N5 断线重连（与 index.ts 同语义）：宽限期内凭原 playerId 恢复
+    // FR-N5 断线重连（与 index.ts 同源语义）：宽限期内凭原 playerId 恢复
     const rejoinId = typeof raw.rejoinId === 'string' ? raw.rejoinId : null;
     if (rejoinId) {
-      for (const r of rooms.values()) {
-        if (r.hasFighter(rejoinId) && r.isDisconnected(rejoinId) && r.tryRejoin(rejoinId)) {
-          joined = true;
-          sessions.set(socket.id, r);
-          socket.emit('welcome', r.welcome(rejoinId));
-          return;
-        }
+      const room = roomManager.findRejoinable(rejoinId);
+      if (room && room.tryRejoin(rejoinId)) {
+        joined = true;
+        sessions.set(socket.id, room);
+        socket.join(room.id);
+        socket.emit('welcome', room.welcome(rejoinId));
+        return;
       }
     }
-    // 对局生命周期（FR-L7，与 index.ts sanitizeRule 同语义的白名单子集）
-    const rule = {
-      killTarget: raw.killTarget === 50 || raw.killTarget === 100 ? raw.killTarget : 30,
-      timeLimitSec: raw.timeLimitSec === 480 || raw.timeLimitSec === 600 ? raw.timeLimitSec : 300,
-    };
-    const room = roomFor(raw.mapId, rule.killTarget, rule.timeLimitSec);
+    // 房间号进房（FR-L8，与 index.ts 同源语义）：非法/不存在 → noRoom，满 → full
+    const rawCode = typeof raw.roomCode === 'string' ? raw.roomCode : '';
+    if (rawCode !== '') {
+      const code = normalizeRoomCode(rawCode);
+      const room = code ? roomManager.findByCode(code) : null;
+      if (!room) {
+        socket.emit('joinRejected', { reason: 'noRoom' });
+        return;
+      }
+      if (!room.hasCapacity) {
+        socket.emit('joinRejected', { reason: 'full' });
+        return;
+      }
+      room.addPlayer(socket.id, raw.nickname || 'P');
+      joined = true;
+      sessions.set(socket.id, room);
+      socket.join(room.id);
+      socket.emit('welcome', room.welcome(socket.id));
+      return;
+    }
+    // 快速加入/选图进房（FR-L3/L4/L7，与 index.ts 同源）：真实 RoomManager 选房 + 白名单校验
+    const difficulty = 'normal' as const;
+    const room = roomManager.pick(
+      typeof raw.mapId === 'string' && MAPS[raw.mapId] ? raw.mapId : undefined,
+      difficulty,
+      sanitizeRule(raw),
+    );
+    if (!room.hasCapacity) {
+      socket.emit('joinRejected', { reason: 'full' });
+      return;
+    }
     room.addPlayer(socket.id, raw.nickname || 'P');
     joined = true;
     sessions.set(socket.id, room);
     socket.join(room.id);
     socket.emit('welcome', room.welcome(socket.id));
+  });
+  // 等待房间（FR-L8，与 index.ts 同源）：建房 / 房主调参 / 房主开局
+  socket.on('createRoom', (raw: { version: number; nickname: string; mapId?: string; killTarget?: number; timeLimitSec?: number }) => {
+    if (joined) return;
+    if (!raw || raw.version !== PROTOCOL_VERSION) {
+      socket.emit('joinRejected', { reason: 'version' });
+      return;
+    }
+    const room = roomManager.createRoom(
+      typeof raw.mapId === 'string' && MAPS[raw.mapId] ? raw.mapId : undefined,
+      'normal',
+      sanitizeRule(raw),
+    );
+    room.addPlayer(socket.id, raw.nickname || 'P', undefined, true);
+    joined = true;
+    sessions.set(socket.id, room);
+    socket.join(room.id);
+    socket.emit('welcome', room.welcome(socket.id));
+  });
+  socket.on('updateRoom', (raw: { mapId?: string; killTarget?: number; timeLimitSec?: number }) => {
+    if (!joined) return;
+    const room = sessions.get(socket.id);
+    if (!room) return;
+    room.updateSettings(socket.id, sanitizeSettings(raw));
+  });
+  socket.on('startMatch', () => {
+    if (!joined) return;
+    const room = sessions.get(socket.id);
+    if (!room || !room.start(socket.id)) return; // 仅房主且等待态
+    for (const [sid, r] of sessions) {
+      if (r === room) io.to(sid).emit('welcome', room.welcome(sid));
+    }
   });
   socket.on('input', (m: InputMsg) => {
     if (joined) sessions.get(socket.id)?.enqueueInput(socket.id, m);
@@ -149,8 +200,8 @@ function fail(msg: string): never {
 }
 
 function cleanup(): void {
-  for (const r of rooms.values()) r.destroy();
-  rooms.clear();
+  roomManager.destroyAll();
+  sessions.clear();
   io.close();
   httpServer.close();
 }
@@ -235,6 +286,15 @@ async function run(): Promise<void> {
       } satisfies InputMsg);
     };
     const died = (): boolean => meAt()?.alive === false;
+    /** 轮询等待 pred（不感知死亡）：用于「跨重生保留」的状态断言（FR-E1 彩蛋模式） */
+    const waitFor = async (pred: () => boolean, timeoutMs: number): Promise<boolean> => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        if (pred()) return true;
+        await sleep(50);
+      }
+      return pred();
+    };
     /** 轮询等待 pred，等待期间被击杀立即以 'dead' 中断（区别于超时，供上层重试）。
      *  「先活后死」才视为被击杀——等待复活的等待（起始即死亡）不被误判，否则重试永远等不到重生。 */
     const waitForAlive = async (pred: () => boolean, timeoutMs: number): Promise<'ok' | 'dead' | 'timeout'> => {
@@ -281,16 +341,18 @@ async function run(): Promise<void> {
     }
 
     // 4c) 冲锋枪彩蛋模式（FR-E1）：错误口令无效；正确口令 → 快照 weaponId='rush' 且 rush=true；
-    //     持续开火弹药不消耗（无限弹药）。彩蛋模式跨重生保留，被 Bot 击杀也不影响断言。
+    //     持续开火弹药不消耗（无限弹药）。彩蛋模式跨重生保留（FR-E1），等待期间被 Bot 击杀
+    //     不影响授予断言 → 用不感知死亡的 waitFor（waitForAlive 的「先活后死」中断会把
+    //     「已授予但恰好死亡」误判为失败，属冒烟假失败，体检修复批次 3 修正）
     c1.socket.emit('rush', { code: '0000' });
     await sleep(300);
     if (meAt()?.rush === true) fail('wrong code must not grant rush mode (FR-E1)');
     c1.socket.emit('rush', { code: CHEAT_RUSH_CODE });
-    const rushed = await waitForAlive(
+    const rushed = await waitFor(
       () => meAt()?.weaponId === 'rush' && meAt()?.rush === true,
       4000,
     );
-    if (rushed !== 'ok') fail(`rush mode not granted after correct code: last=${JSON.stringify(meAt())}`);
+    if (!rushed) fail(`rush mode not granted after correct code: last=${JSON.stringify(meAt())}`);
     const rushFireTimer = setInterval(() => fireInput(true), 33);
     await sleep(2000);
     clearInterval(rushFireTimer);
@@ -382,6 +444,104 @@ async function run(): Promise<void> {
     }
     console.log('[smoke:net] active leave OK (entity removed immediately, rejoin id invalidated)');
     c4.socket.close();
+
+    // 8) 等待房间（FR-L8）：createRoom → waiting 态（无 Bot、无快照下发、4 位数字房间号）
+    const hostSock = Client(`http://localhost:${PORT}`, { transports: ['websocket'] });
+    const hostWelcomes: WelcomeMsg[] = [];
+    const hostRoomUpdates: RoomInfoMsg[] = [];
+    let hostSnaps = 0;
+    hostSock.on('welcome', (w: WelcomeMsg) => hostWelcomes.push(w));
+    hostSock.on('roomUpdate', (m: RoomInfoMsg) => hostRoomUpdates.push(m));
+    hostSock.on('snapshot', () => hostSnaps++);
+    const hostReady = new Promise<WelcomeMsg>((resolve) => {
+      const h = (w: WelcomeMsg): void => {
+        if (w.room?.state === 'waiting') {
+          hostSock.off('welcome', h);
+          resolve(w);
+        }
+      };
+      hostSock.on('welcome', h);
+    });
+    hostSock.connect();
+    hostSock.emit('createRoom', {
+      version: PROTOCOL_VERSION,
+      nickname: 'Host',
+      mapId: 'range',
+      killTarget: 50,
+      timeLimitSec: 600,
+    });
+    const hw = await hostReady;
+    if (!/^\d{4}$/.test(hw.room!.code)) fail(`expected 4-digit room code, got ${hw.room!.code}`);
+    if (hw.room!.killTarget !== 50) fail(`host room rule should be 50 kills, got ${hw.room!.killTarget}`);
+    if (hw.entities.length !== 1) fail(`waiting room must have no bots, got ${hw.entities.length} entities`);
+    if (hw.room!.hostId !== hw.playerId) fail('room creator must be the host');
+    await sleep(800);
+    if (hostSnaps !== 0) fail(`waiting room must not broadcast snapshots, got ${hostSnaps}`);
+    console.log(`[smoke:net] waiting room OK (code=${hw.room!.code}, no bots, no snapshots)`);
+
+    // 9) 房间号加入（FR-L8）：按号进等待房，双方 roomUpdate 同步玩家列表与房主
+    const joinSock = Client(`http://localhost:${PORT}`, { transports: ['websocket'] });
+    const jWelcomes: WelcomeMsg[] = [];
+    let joinSnaps = 0;
+    joinSock.on('welcome', (w: WelcomeMsg) => jWelcomes.push(w));
+    joinSock.on('snapshot', () => joinSnaps++);
+    const joinReady = new Promise<WelcomeMsg>((resolve) => {
+      const h = (w: WelcomeMsg): void => {
+        if (w.room?.state === 'waiting') {
+          joinSock.off('welcome', h);
+          resolve(w);
+        }
+      };
+      joinSock.on('welcome', h);
+    });
+    joinSock.connect();
+    joinSock.emit('join', { version: PROTOCOL_VERSION, nickname: 'Guest', roomCode: hw.room!.code });
+    const jw = await joinReady;
+    if (jw.playerId === hw.playerId) fail('guest must get its own player id');
+    if (hostRoomUpdates.at(-1)!.players.length !== 2) fail('host roomUpdate must list 2 players');
+    if (hostRoomUpdates.at(-1)!.hostId !== hw.playerId) fail('hostId must stay on creator');
+    console.log('[smoke:net] join by room code OK (2 players, host preserved)');
+
+    // 10) 房主权限（FR-L8）：非房主改参数被忽略；房主改参数广播生效
+    joinSock.emit('updateRoom', { killTarget: 30 });
+    await sleep(300);
+    if (hostRoomUpdates.at(-1)!.killTarget !== 50) fail('non-host updateRoom must be ignored');
+    hostSock.emit('updateRoom', { mapId: 'alley' });
+    await sleep(300);
+    if (hostRoomUpdates.at(-1)!.mapId !== 'alley') fail('host updateRoom must broadcast new map');
+    console.log('[smoke:net] host-only settings OK (guest ignored, host map change broadcast)');
+
+    // 11) 房主开局（FR-L8）：全员收到重发 welcome(state=running) + 当前地图 + Bot 按量加入 + 快照恢复
+    hostWelcomes.length = 0;
+    jWelcomes.length = 0;
+    hostSock.emit('startMatch');
+    await sleep(600);
+    const runningH = hostWelcomes.at(-1);
+    const runningJ = jWelcomes.at(-1);
+    if (runningH?.room?.state !== 'running' || runningJ?.room?.state !== 'running') {
+      fail('startMatch must re-emit welcome(state=running) to all members');
+    }
+    if (runningH!.mapId !== 'alley' || runningJ!.mapId !== 'alley') {
+      fail(`match must use host-selected map alley, got ${runningH!.mapId}/${runningJ!.mapId}`);
+    }
+    if (!runningH!.entities.some((e) => e.bot)) fail('bots must join on match start (default botCount)');
+    if (hostSnaps === 0 || joinSnaps === 0) fail('snapshots must flow after match start');
+    console.log(`[smoke:net] host startMatch OK (map=${runningH!.mapId}, running, snapshots flowing)`);
+    hostSock.close();
+    joinSock.close();
+    await sleep(200); // 排空断线事件，避免影响后续断言
+
+    // 12) 非法房间号（FR-L8）：不存在 → joinRejected 'noRoom'（房间号段 1000~9999，0000 必不存在）
+    const badSock = Client(`http://localhost:${PORT}`, { transports: ['websocket'] });
+    const noRoom = await new Promise<string>((resolve) => {
+      badSock.on('joinRejected', (m: { reason: string }) => resolve(m.reason));
+      badSock.connect();
+      badSock.emit('join', { version: PROTOCOL_VERSION, nickname: 'X', roomCode: '0000' });
+      setTimeout(() => resolve('none'), 2000);
+    });
+    badSock.close();
+    if (noRoom !== 'noRoom') fail(`invalid room code rejection expected, got "${noRoom}"`);
+    console.log('[smoke:net] invalid room code rejection OK (noRoom)');
 
     c2.socket.close();
     if (c1.inputTimer) clearInterval(c1.inputTimer);
