@@ -147,6 +147,36 @@ body.in-game #game {
   width: 420px;
 }
 
+/* ---------- 加入房间弹窗（v0.4.0）：大厅内覆盖层，复用 .panel 视觉规范 ----------
+   嵌在 #lobby 内（继承 #lobby label/input/button 样式），z-index 高于大厅面板 */
+#joinDialog {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 10, 13, 0.6);
+}
+
+#joinDialog .panel {
+  width: 320px;
+}
+
+#joinDialog h2 {
+  text-align: center;
+  font-size: 22px;
+  letter-spacing: 2px;
+  color: #ffb74d;
+}
+
+#joinError {
+  color: #e57373;
+  font-size: 13px;
+  text-align: center;
+  min-height: 1em; /* 预留一行高度，错误出现时面板不跳动 */
+}
+
 /* 房间号大字展示（局域网 http 非安全上下文无 clipboard API，仅展示+可手动选中） */
 #waitroom .codebox {
   display: flex;
@@ -243,15 +273,8 @@ body.in-game #game {
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
 }
 
-#hint {
-  position: fixed;
-  bottom: 14px;
-  left: 50%;
-  transform: translateX(-50%);
-  color: #78909c;
-  font-size: 12px;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
-}
+/* 操作提示（v0.4.0）：原 HUD 底部 #hint 与 pad 模式底部中央血条重叠 → 移入设置面板帮助区块
+   （样式见 #settings .helpBlock），HUD 内不再有独立提示元素 */
 
 #topbar {
   position: fixed;
@@ -791,6 +814,44 @@ body.in-game #game {
   filter: brightness(1.2);
 }
 
+/* 操作提示帮助区块（v0.4.0）：原 HUD 底部 #hint 移入本面板（与 pad 模式底部中央血条重叠的修复） */
+#settings .helpBlock {
+  padding: 10px 12px;
+  border: 1px solid #2c3440;
+  border-radius: 8px;
+  background: #10151b;
+}
+
+#settings .helpBlock h3 {
+  font-size: 12px;
+  letter-spacing: 1px;
+  color: #ffb74d;
+  margin-bottom: 4px;
+}
+
+#settings .helpBlock p {
+  font-size: 12px;
+  line-height: 1.7;
+  color: #90a4ae;
+}
+
+/* 面板底部按钮组：返回首页（次要）+ 关闭 */
+#settings .buttons {
+  display: flex;
+  gap: 10px;
+}
+
+#settings .buttons button {
+  flex: 1;
+  margin-top: 0;
+}
+
+#settings button.home {
+  background: transparent;
+  border: 1px solid #2c3440;
+  color: #90a4ae;
+}
+
 /* ---------- 触屏控制（FR-U6，iPad/iPhone 浏览器） ---------- */
 
 /* iOS Safari 动态视口：100dvh 优先（地址栏收展不再裁切），不支持时回落 100vh */
@@ -903,17 +964,11 @@ body:not(.touch) #touchControls {
   font-size: 17px;
 }
 
-/* 触屏端提示移到顶部（底部是摇杆热区） */
-body.touch #hint {
-  bottom: auto;
-  top: 60px;
-  font-size: 11px;
-}
-
 /* ---------- 小屏适配（手机竖屏 / 小平板分屏） ---------- */
 @media (max-width: 640px), (max-height: 620px) {
   #lobby .panel,
   #waitroom .panel,
+  #joinDialog .panel,
   #settings .panel,
   #settlement .panel {
     width: min(420px, calc(100vw - 20px));
@@ -932,7 +987,8 @@ body.touch #hint {
   }
 
   #lobby h1,
-  #waitroom h2 {
+  #waitroom h2,
+  #joinDialog h2 {
     font-size: 24px;
   }
 
@@ -947,14 +1003,6 @@ body.touch #hint {
   #minimap {
     width: 100px;
     height: 100px;
-  }
-
-  #hint {
-    display: none; /* 小屏键位提示无意义（触屏端显示触控提示于顶部） */
-  }
-
-  body.touch #hint {
-    display: block;
   }
 }
 
@@ -1020,17 +1068,17 @@ body:not(.touch) #touchModeRow {
 }
 
 /* pad 模式无开火键：换弹/切枪按钮右移到右缘竖排；血条移到底部中央（hint 已在顶部） */
-body.pad #tbtn-reload {
+body.touch.pad #tbtn-reload {
   right: calc(24px + env(safe-area-inset-right));
   bottom: calc(96px + env(safe-area-inset-bottom));
 }
 
-body.pad #tbtn-switch {
+body.touch.pad #tbtn-switch {
   right: calc(24px + env(safe-area-inset-right));
   bottom: calc(164px + env(safe-area-inset-bottom));
 }
 
-body.pad #healthwrap {
+body.touch.pad #healthwrap {
   left: 50%;
   transform: translateX(-50%);
   bottom: calc(12px + env(safe-area-inset-bottom));
@@ -1069,11 +1117,11 @@ body.pad #healthwrap {
     top: 47px;
   }
 
-  body.pad #tbtn-reload {
+  body.touch.pad #tbtn-reload {
     bottom: calc(76px + env(safe-area-inset-bottom));
   }
 
-  body.pad #tbtn-switch {
+  body.touch.pad #tbtn-switch {
     bottom: calc(132px + env(safe-area-inset-bottom));
   }
 }

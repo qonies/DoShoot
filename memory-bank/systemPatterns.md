@@ -43,12 +43,13 @@ apps/client/src/game/
 ├─ world.ts      # NetWorld：本地预测 + 快照和解(seq ack + 输入重放) + 事件分发（unlock/matchEnd/进度持久化回调）
 ├─ hud.ts        # HUD + 计分板(Tab)/结算面板/解锁横幅/对局倒计时（M3 扩展）
 ├─ minimap.ts    # 小地图（FR-U2，M4）：墙体预渲染底图 + 自己位置/朝向（不显示敌人）
-├─ (src/settings.ts) # 设置持久化（FR-L5，M4）：音量/BGM/画质/语言 → localStorage + Esc 面板
+├─ (src/settings.ts) # 设置持久化（FR-L5，M4）：音量/BGM/画质/语言 → localStorage + Esc 面板（v0.4.0 增加操作提示帮助区块 #helpHint + 返回首页按钮 #setHome）
 ├─ (src/game/touch.ts)        # 触屏控制器·stick 模式（可选）：双虚拟摇杆 + 开火/换弹/切枪/设置按钮（仅 pointerType==='touch'）；定义 TouchController 统一契约（consume/getAim/destroy）与 TouchAim（dir|client|none）
 ├─ (src/game/touchpad.ts)     # 触屏控制器·pad 模式（v0.3.8 默认）：左下 D-pad 四向（多点触控斜向合成）+ 点击/按住屏幕瞄准射击（无开火键）
 ├─ (src/game/gestures.ts)     # iOS 手势加固（v0.3.8 双模式共用）：对局中 window 层双指/gesture 拦截（修「双指误缩放」；配合 body.in-game #game touch-action:none）
 ├─ (src/game/touchmath.ts)    # 摇杆/方向纯函数（stickVector 钳制/归一化/死区/平滑 + dpadVector 四向合成 + clientToNdc + isTouchDevice 判定，零依赖可单测）
-├─ (src/waitroom.ts)        # 等待房间界面（FR-L8，v0.3.5）：房间号/玩家列表/房主调参/开局
+├─ (src/waitroom.ts)        # 等待房间界面（FR-L8，v0.3.5）：房间号/玩家列表/房主调参/开局（v0.4.0 起为参数唯一配置入口）
+├─ (src/main.ts 大厅段)      # 大厅（v0.4.0 精简）：昵称 + 新建游戏（createRoom 缺省参数进等待房）/ 加入游戏弹窗（#joinDialog 内联校验）/ 回到上一局（#rejoinBtn 条件显示，FR-N5）
 ├─ weapons(→shared) / input.ts  # 输入同 M1
 scripts/net-smoke.ts  # 集成冒烟：起临时服务器 + 模拟客户端验证进房/移动/快照/重连/双地图/等待房间（v0.3.7 起复用真实 RoomManager/sanitize*，corepack pnpm smoke:net）
 ```

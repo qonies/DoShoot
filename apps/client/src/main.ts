@@ -1,12 +1,13 @@
-/** M3 入口：i18n + 大厅（地图/Bot 难度选择）+ 联机对局主循环（连接 → 进房 → 预测/插值渲染；权威在服务端 room.ts） */
+/** 入口：i18n + 大厅（v0.4.0 精简：昵称 + 新建/加入/重连入口，参数配置全部下移至等待房间 FR-L8）
+ *  + 联机对局主循环（连接 → 进房 → 预测/插值渲染；权威在服务端 room.ts） */
 
 import './style.css';
 import * as THREE from 'three';
 import {
   CHEAT_RUSH_CODE,
   DEFAULT_MAP,
-  MAPS,
   PROTOCOL_VERSION,
+  RECONNECT_GRACE,
   getMap,
   nextWeaponId,
   normalizeRoomCode,
@@ -48,8 +49,11 @@ const settings = loadSettings();
 applyAudioSettings(settings);
 
 const langBtn = document.querySelector<HTMLButtonElement>('#langBtn')!;
-/** 不走 data-i18n 的动态语言 UI：大厅切换按钮标签 + 对局内操作提示（对局中切语言需同步刷新） */
+/** 不走 data-i18n 的动态语言 UI：大厅切换按钮标签 + 设置面板操作提示（v0.4.0 起 #hint 移入 Esc 面板） */
 let hintElRef: HTMLElement | null = null;
+// 操作提示（v0.4.0）：原 HUD 底部 #hint 与 pad 模式底部中央血条重叠 → 移入设置面板帮助区块；
+// 文案随语言与触屏模式刷新（refreshLangUi / recreateTouchControls），初始内容在此处赋值
+hintElRef = document.querySelector<HTMLElement>('#helpHint')!;
 function refreshLangUi(): void {
   langBtn.textContent = getLang() === 'zh' ? 'EN' : '中文';
   // 触屏端按当前操作模式显示提示（pad=D-pad+点击射击 / stick=双摇杆），桌面端显示键位提示
@@ -68,33 +72,93 @@ langBtn.addEventListener('click', () => {
 });
 
 const nicknameInput = document.querySelector<HTMLInputElement>('#nickname')!;
-/** 房间号输入（FR-L8）：4 位数字，回车或「加入房间」按钮触发按号进房 */
-const roomCodeInput = document.querySelector<HTMLInputElement>('#roomCode')!;
 function randomName(): string {
   return `${t('randomName')}-${Math.floor(1000 + Math.random() * 9000)}`;
 }
 nicknameInput.value = localStorage.getItem(NICKNAME_KEY) ?? randomName();
 
-// 地图下拉（FR-L3/MP2：数据驱动 + 「随机」项；随机 = mapId 缺省，由服务端任意分配，同快速加入语义）
-const randomOpt = document.createElement('option');
-randomOpt.value = 'random';
-randomOpt.dataset.i18n = 'map.random'; // 挂 data-i18n：切换语言时 applyDom 同步刷新（FR-L6/NFR-9）
-randomOpt.textContent = t('map.random');
-const mapSelect = document.querySelector<HTMLSelectElement>('#map')!;
-mapSelect.replaceChildren(
-  ...Object.values(MAPS).map((m) => {
-    const opt = document.createElement('option');
-    opt.value = m.id;
-    opt.dataset.i18n = m.nameKey; // 挂 data-i18n：切换语言时 applyDom 同步刷新（FR-L6/NFR-9）
-    opt.textContent = t(m.nameKey);
-    return opt;
-  }),
-  randomOpt,
-);
-const difficultySelect = document.querySelector<HTMLSelectElement>('#difficulty')!;
-// 对局生命周期（FR-L7）：击杀目标 + 时限下拉（先到即结束，默认 30 杀 / 5 分钟）
-const killTargetSelect = document.querySelector<HTMLSelectElement>('#killTarget')!;
-const timeLimitSelect = document.querySelector<HTMLSelectElement>('#timeLimit')!;
+// ---------- 加入房间弹窗（v0.4.0）：大厅「加入游戏」→ 输入 4 位房间号加入 ----------
+// Enter 提交 / Esc 或遮罩点击取消；本地校验（normalizeRoomCode）与服务端拒绝（noRoom）均内联提示，
+// 不再走屏幕中央的 #netmsg（会压在弹窗上方且语义不符）
+const joinDialogEl = document.querySelector<HTMLDivElement>('#joinDialog')!;
+const joinCodeInput = document.querySelector<HTMLInputElement>('#joinCode')!;
+const joinErrorEl = document.querySelector<HTMLDivElement>('#joinError')!;
+
+function openJoinDialog(): void {
+  joinCodeInput.value = '';
+  joinErrorEl.classList.add('hidden');
+  joinDialogEl.classList.remove('hidden');
+  joinCodeInput.focus();
+}
+
+function closeJoinDialog(): void {
+  joinDialogEl.classList.add('hidden');
+}
+
+function showJoinError(key: string): void {
+  joinErrorEl.textContent = t(key);
+  joinErrorEl.classList.remove('hidden');
+}
+
+function submitJoinCode(): void {
+  const raw = nicknameInput.value.trim();
+  const nickname = raw || randomName();
+  if (nickname.length < 2 || nickname.length > 16) {
+    showJoinError('lobby.nameInvalid');
+    return;
+  }
+  // 房间号加入（FR-L8）：客户端先行规范化校验（服务端再权威校验）
+  const code = normalizeRoomCode(joinCodeInput.value);
+  if (!code) {
+    showJoinError('join.codeInvalid');
+    return;
+  }
+  closeJoinDialog();
+  startGame('join', code);
+}
+
+// ---------- 断线重连（FR-N5，v0.4.0）：对局中断线 → 30s 宽限内大厅显示「回到上一局」 ----------
+// 等待房间断线 / 主动离开无宽限（服务端立即移除实体）→ 立即清除凭据并隐藏按钮，不给虚假重连入口。
+// 服务端 join 不带 roomCode 时先走 tryRejoin 分支（apps/server/src/index.ts），超时/已回收则按新进房处理。
+const rejoinBtn = document.querySelector<HTMLButtonElement>('#rejoinBtn')!;
+let rejoinTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** 仅收起按钮/停表（保留凭据）：进入对局或等待房间后调用（后续断线仍可重连） */
+function cancelRejoinUi(): void {
+  if (rejoinTimer !== null) {
+    clearTimeout(rejoinTimer);
+    rejoinTimer = null;
+  }
+  rejoinBtn.classList.add('hidden');
+}
+
+/** 彻底清除：收起按钮 + 丢弃重连凭据（主动离开 / 新开局 / 宽限到期） */
+function clearRejoin(): void {
+  cancelRejoinUi();
+  sessionStorage.removeItem(PLAYER_ID_KEY);
+}
+
+function offerRejoin(): void {
+  if (!sessionStorage.getItem(PLAYER_ID_KEY)) return;
+  rejoinBtn.classList.remove('hidden');
+  if (rejoinTimer === null) {
+    rejoinTimer = setTimeout(clearRejoin, RECONNECT_GRACE * 1000);
+  }
+}
+
+rejoinBtn.addEventListener('click', () => startGame('rejoin'));
+
+// 加入弹窗交互：Enter 提交、Esc / 遮罩点击关闭（与设置面板遮罩关闭同交互惯例）
+joinCodeInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') submitJoinCode();
+});
+joinDialogEl.addEventListener('pointerdown', (e) => {
+  if (e.target === joinDialogEl) closeJoinDialog();
+});
+window.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || joinDialogEl.classList.contains('hidden')) return;
+  closeJoinDialog();
+});
 
 // 武器解锁进度（FR-A1：localStorage 本地持久层，跨局保留成长）
 function loadProgress(): Partial<Record<WeaponId, number>> {
@@ -129,44 +193,39 @@ let stopGameLoop: (() => void) | null = null;
 /** 当前等待房间界面（FR-L8）：非空 = 正在等待开局（非 connecting/inGame 的第三种状态） */
 let activeWaitroom: WaitRoom | null = null;
 
-function startGame(kind: 'quick' | 'map' | 'code'): void {
+/** 当前活跃连接（v0.4.0）：设置面板「返回首页」等模块级离开逻辑需要访问（net 原为 startGame 局部变量） */
+let activeNet: Net | null = null;
+
+function startGame(kind: 'create' | 'join' | 'rejoin', roomCode?: string): void {
   if (connecting || inGame || activeWaitroom) return;
   // 昵称校验（FR-L1：2~16 字符，与服务端 sanitizeNickname 一致）；非法则提示并中止，
   // 避免「被服务端静默改名为 P-xxxx」的无感知体验。空输入回退随机名（默认名规则）。
-  const raw = nicknameInput.value.trim();
-  const nickname = raw || randomName();
-  if (nickname.length < 2 || nickname.length > 16) {
-    showNetMsg('lobby.nameInvalid');
-    return;
-  }
-  // 房间号加入（FR-L8）：客户端先行规范化校验（服务端再权威校验）
-  let roomCode: string | undefined;
-  if (kind === 'code') {
-    const code = normalizeRoomCode(roomCodeInput.value);
-    if (!code) {
-      showNetMsg('net.roomNotFound');
+  // 重连（rejoin）沿用原实体名（服务端 tryRejoin 忽略昵称），无需校验/持久化昵称。
+  let nickname = '';
+  if (kind !== 'rejoin') {
+    const raw = nicknameInput.value.trim();
+    nickname = raw || randomName();
+    if (nickname.length < 2 || nickname.length > 16) {
+      showNetMsg('lobby.nameInvalid');
       return;
     }
-    roomCode = code;
+  } else if (!sessionStorage.getItem(PLAYER_ID_KEY)) {
+    return; // 凭据缺失（按钮此时应已隐藏，防御性兜底）
+  }
+  if (kind === 'create' || kind === 'join') {
+    clearRejoin(); // 新开局丢弃旧重连凭据（旧对局状态不再可恢复）
   }
   connecting = true;
-  try {
-    localStorage.setItem(NICKNAME_KEY, nickname);
-  } catch {
-    /* localStorage 不可用时忽略（与进度/设置/i18n 写入点同等保护） */
+  if (kind !== 'rejoin') {
+    try {
+      localStorage.setItem(NICKNAME_KEY, nickname);
+    } catch {
+      /* localStorage 不可用时忽略（与进度/设置/i18n 写入点同等保护） */
+    }
   }
   document.querySelector('#lobby')!.classList.add('hidden');
   showNetMsg('net.connecting');
   sfx.ensure(); // 首次用户交互初始化音频（浏览器自动播放策略，FR-S1）
-
-  // 大厅公共参数（新建/加入共用；「随机」地图 = mapId 缺省由服务端分配）
-  const lobbyParams = {
-    mapId: kind === 'quick' || mapSelect.value === 'random' ? undefined : mapSelect.value || 'range',
-    difficulty: difficultySelect.value as 'easy' | 'normal' | 'hard',
-    killTarget: Number(killTargetSelect.value),
-    timeLimitSec: Number(timeLimitSelect.value),
-    progress: loadProgress(),
-  };
 
   const net = new Net({
     onWelcome: (welcome) => {
@@ -178,6 +237,7 @@ function startGame(kind: 'quick' | 'map' | 'code'): void {
         showNetMsg('net.versionMismatch');
         return;
       }
+      cancelRejoinUi(); // 已进入房间/对局：收起重连入口（凭据保留，供本次对局断线重连）
       // 等待房间（FR-L8）：建房/按房间号加入后先进入等待界面，开局时服务端重发
       // welcome(room.state='running') 再走下方进局分支（复用全部既有进局链路）
       if (welcome.room?.state === 'waiting') {
@@ -205,6 +265,7 @@ function startGame(kind: 'quick' | 'map' | 'code'): void {
     onRejected: (reason) => {
       connecting = false;
       net.close(); // 被拒后关闭连接，避免空闲 socket 泄漏（重试会新建 Net）
+      if (activeNet === net) activeNet = null;
       backToLobby();
       showNetMsg(
         reason === 'full'
@@ -215,15 +276,18 @@ function startGame(kind: 'quick' | 'map' | 'code'): void {
       );
     },
     onDisconnected: () => {
+      if (activeNet === net) activeNet = null;
       if (inGame) {
         inGame = false;
         stopGameLoop?.();
         stopGameLoop = null;
         net.close(); // 阻止 socket.io 自动重连产生孤儿连接
-        backToLobby(); // 修复断线死路：回大厅后 30s 宽限内重新开始可凭 rejoinId 回原对局（FR-N5）
+        backToLobby(); // 修复断线死路：回大厅后 30s 宽限内可经「回到上一局」凭 rejoinId 回原对局（FR-N5）
+        offerRejoin();
         showNetMsg('net.disconnected');
       } else if (activeWaitroom) {
-        // 等待房间中断线（FR-L8）：等待态服务端立即移除实体，无对局状态可恢复
+        // 等待房间中断线（FR-L8）：等待态服务端立即移除实体，无对局状态可恢复 → 不提供重连入口
+        clearRejoin();
         exitWaitRoom();
         net.close();
         backToLobby();
@@ -239,6 +303,7 @@ function startGame(kind: 'quick' | 'map' | 'code'): void {
     },
     onConnectError: () => {
       if (inGame) return; // 对局中断线由 onDisconnected 处理
+      if (activeNet === net) activeNet = null;
       exitWaitRoom();
       connecting = false;
       net.close(); // 停止无限重试，允许用户修正后重试
@@ -246,15 +311,17 @@ function startGame(kind: 'quick' | 'map' | 'code'): void {
       showNetMsg('net.connectFailed');
     },
   });
-  // 进房（FR-L3/L4/L7/L8/B3/N5/A1）：新建游戏 → createRoom（等待房间）；
-  // 快速加入 / 房间号加入 → join（后者携带规范化后的 roomCode）
-  if (kind === 'map') {
-    net.createRoom({ version: PROTOCOL_VERSION, nickname, ...lobbyParams });
+  activeNet = net;
+  // 进房（FR-L8/N5/A1，v0.4.0）：新建游戏 → createRoom 进等待房间（地图/难度/规则/Bot 数缺省走
+  // 服务端默认，等待界面内由房主调整）；加入游戏 → join + roomCode；回到上一局 → join + rejoinId
+  //（服务端 tryRejoin 分支恢复原实体；规则字段仅在服务端需要建房时生效，此处一律不传）
+  if (kind === 'create') {
+    net.createRoom({ version: PROTOCOL_VERSION, nickname, progress: loadProgress() });
   } else {
     net.join({
       version: PROTOCOL_VERSION,
       nickname,
-      ...lobbyParams,
+      progress: loadProgress(),
       rejoinId: sessionStorage.getItem(PLAYER_ID_KEY),
       ...(roomCode !== undefined ? { roomCode } : {}),
     });
@@ -267,11 +334,12 @@ function enterWaitRoom(net: Net, welcome: WelcomeMsg): void {
   activeWaitroom = new WaitRoom({
     onStart: () => net.startMatch(),
     onLeave: () => {
-      // 主动离开等待房间：与对局内「返回大厅」同语义（服务端立即移除，不走断线宽限）
+      // 主动离开等待房间：与对局内「返回首页」同语义（服务端立即移除，不走断线宽限）
       exitWaitRoom();
       net.sendLeave();
       net.close();
-      sessionStorage.removeItem(PLAYER_ID_KEY);
+      if (activeNet === net) activeNet = null;
+      clearRejoin();
       backToLobby();
     },
     onSettingsChange: (patch) => net.updateRoom(patch), // 服务端白名单 + 房主校验后广播回流
@@ -294,6 +362,7 @@ function backToLobby(): void {
   syncTouchUiVisibility(); // 面板全关 → 恢复触屏按钮（body.ui-open 复位）
   document.body.classList.remove('in-game', 'pad'); // 对局手势作用域与 pad 模式布局复位
   exitWaitRoom(); // 等待房间界面（FR-L8）：释放事件监听并隐藏
+  closeJoinDialog(); // 加入房间弹窗（v0.4.0）：残留时复位（重连凭据/按钮状态由调用方管理）
   document.querySelector('#lobby')!.classList.remove('hidden');
   document.querySelector('#hud')!.classList.add('hidden');
 }
@@ -305,15 +374,14 @@ function syncTouchUiVisibility(): void {
   document.body.classList.toggle('ui-open', Input.isGameInputBlocked());
 }
 
-// 大厅入口（FR-L8）：新建游戏 → 等待房间；快速加入 → 自动匹配；加入房间 → 按房间号进房
-document.querySelector('#start')!.addEventListener('click', () => startGame('map'));
-document.querySelector('#quickJoin')!.addEventListener('click', () => startGame('quick'));
-document.querySelector('#joinRoom')!.addEventListener('click', () => startGame('code'));
-roomCodeInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') startGame('code');
-});
+// 大厅入口（v0.4.0）：新建游戏 → 等待房间（房主在等待界面调参）；加入游戏 → 房间号弹窗；
+// 回到上一局 → 断线宽限内凭 rejoinId 重连（条件显示，见 offerRejoin）
+document.querySelector('#start')!.addEventListener('click', () => startGame('create'));
+document.querySelector('#joinGame')!.addEventListener('click', openJoinDialog);
+document.querySelector('#joinConfirm')!.addEventListener('click', submitJoinCode);
+document.querySelector('#joinCancel')!.addEventListener('click', closeJoinDialog);
 nicknameInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') startGame('map');
+  if (e.key === 'Enter') startGame('create');
 });
 
 // ---------- 设置面板（FR-L5，M4）：模块级一次性绑定 ----------
@@ -346,6 +414,21 @@ window.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape' || !inGame) return;
   toggleSettingsPanel();
 });
+/** 对局内「返回首页」（v0.4.0，设置面板按钮）：与结算面板「返回大厅」同语义——主动离开：
+ *  先停本地循环再关连接（服务端 sendLeave 立即移除实体，不走 30s 宽限），并清除重连凭据。
+ *  hoisted 函数：结算面板 onLeave（runGameLoop 内）复用同一实现，避免两套离开逻辑分叉 */
+function leaveMatchToLobby(): void {
+  if (!inGame) return;
+  inGame = false;
+  stopGameLoop?.();
+  stopGameLoop = null;
+  activeNet?.sendLeave();
+  activeNet?.close();
+  activeNet = null;
+  clearRejoin(); // 主动离开即彻底退出（清除重连凭据，FR-N5 语义区分）
+  backToLobby();
+}
+document.querySelector('#setHome')!.addEventListener('click', leaveMatchToLobby);
 document.querySelector('#setClose')!.addEventListener('click', () => {
   settingsEl.classList.add('hidden');
   syncTouchUiVisibility();
@@ -412,6 +495,7 @@ function runGameLoop(net: Net, welcome: WelcomeMsg): () => void {
     // WebGL 初始化失败（NFR-6 基线外的环境）：可见失败并回大厅，而非黑屏挂起
     inGame = false;
     net.close();
+    if (activeNet === net) activeNet = null;
     backToLobby();
     showNetMsg('net.webglFailed');
     return () => {};
@@ -456,10 +540,9 @@ function runGameLoop(net: Net, welcome: WelcomeMsg): () => void {
   const aim = new THREE.Vector2();
   aim.set(world.local.x, world.local.y - TOUCH_AIM_DIST); // 默认朝上；pad 模式首次点击前保持
 
-  const hintEl = document.querySelector<HTMLElement>('#hint')!;
-  hintEl.textContent = TOUCH ? touchHintText() : t('hint');
-  hintElRef = hintEl; // 语言切换时同步刷新（refreshLangUi）
   const fpsEl = document.querySelector<HTMLElement>('#fps')!;
+  // 操作提示（v0.4.0）已移入设置面板帮助区块（#helpHint），随语言/触屏模式由
+  // refreshLangUi() 与 recreateTouchControls() 刷新，此处不再写 HUD 内的 #hint
 
   net.socket.on('snapshot', (msg: SnapshotMsg) => world.applySnapshot(msg));
 
@@ -485,15 +568,10 @@ function runGameLoop(net: Net, welcome: WelcomeMsg): () => void {
     hud.hideSettlement();
     hud.hideScoreboard();
     syncTouchUiVisibility();
-    // 主动离开：先落本地状态再关连接，避免 disconnect 回调误报「连接已断开」并重复清理
-    inGame = false;
-    stopGameLoop?.();
-    stopGameLoop = null;
-    net.sendLeave(); // 服务端立即移除实体（不走 30s 断线宽限，FR-N5/N6）
-    net.close();
-    // 清除重连凭据：主动离开即彻底退出，下次「开始游戏」开新局（意外断线才走 FR-N5 宽限重连）
-    sessionStorage.removeItem(PLAYER_ID_KEY);
-    backToLobby();
+    // 主动离开与设置面板「返回首页」共用同一实现（leaveMatchToLobby）：
+    // 先落本地状态再关连接，避免 disconnect 回调误报「连接已断开」并重复清理；
+    // 服务端 sendLeave 立即移除实体（不走 30s 断线宽限，FR-N5/N6），重连凭据一并清除
+    leaveMatchToLobby();
   };
   document.querySelector('#rematchBtn')!.addEventListener('click', onRematch);
   document.querySelector('#leaveBtn')!.addEventListener('click', onLeave);

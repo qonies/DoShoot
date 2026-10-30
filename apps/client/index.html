@@ -16,7 +16,6 @@
     <div id="hud" class="hidden">
       <div id="fps">-- FPS</div>
       <canvas id="minimap" width="150" height="150"></canvas>
-      <div id="hint"></div>
       <div id="topbar">
         <span data-i18n="hud.kills"></span>
         <b id="killCount">0</b>
@@ -93,7 +92,16 @@
               <option value="stick" data-i18n="touch.modeStick"></option>
             </select>
           </label>
-          <button id="setClose" data-i18n="set.close"></button>
+          <!-- 操作提示（v0.4.0）：原 HUD 底部 #hint 与 pad 模式底部中央血条重叠，移入本面板（Esc / 触屏设置按钮打开）；
+               文案由 main.ts 按设备与触屏模式动态刷新（hint / hint.touch / hint.pad），不走 data-i18n -->
+          <div class="helpBlock">
+            <h3 data-i18n="set.controls"></h3>
+            <p id="helpHint"></p>
+          </div>
+          <div class="buttons">
+            <button id="setHome" class="home" data-i18n="set.home"></button>
+            <button id="setClose" data-i18n="set.close"></button>
+          </div>
         </div>
       </div>
       <div id="vignette"></div>
@@ -102,7 +110,7 @@
     <!-- 连接状态提示（M2 进房/断线） -->
     <div id="netmsg" class="hidden"></div>
 
-    <!-- 大厅（FR-L1/L2/L3/L5/L6） -->
+    <!-- 大厅（FR-L1；v0.4.0 精简：参数配置全部下移至等待房间 FR-L8，首页仅昵称 + 入口按钮） -->
     <div id="lobby">
       <div class="panel">
         <h1>DoShoot</h1>
@@ -110,54 +118,33 @@
           <span data-i18n="nickname"></span>
           <input id="nickname" maxlength="16" autocomplete="off" />
         </label>
-        <label>
-          <span data-i18n="mode"></span>
-          <select id="mode">
-            <option value="ffa">FFA</option>
-            <option value="tdm" disabled data-i18n="modeTdm">TDM (V2)</option>
-            <option value="hardpoint" disabled data-i18n="modeHardpoint">Hardpoint (V2)</option>
-          </select>
-        </label>
-        <label>
-          <span data-i18n="map"></span>
-          <select id="map"></select>
-        </label>
-        <label>
-          <span data-i18n="difficulty"></span>
-          <select id="difficulty">
-            <option value="easy" data-i18n="diff.easy"></option>
-            <option value="normal" selected data-i18n="diff.normal"></option>
-            <option value="hard" data-i18n="diff.hard"></option>
-          </select>
-        </label>
-        <label>
-          <span data-i18n="killTarget"></span>
-          <select id="killTarget">
-            <option value="30" selected data-i18n="rule.kills30"></option>
-            <option value="50" data-i18n="rule.kills50"></option>
-            <option value="100" data-i18n="rule.kills100"></option>
-          </select>
-        </label>
-        <label>
-          <span data-i18n="timeLimit"></span>
-          <select id="timeLimit">
-            <option value="300" selected data-i18n="rule.time5"></option>
-            <option value="480" data-i18n="rule.time8"></option>
-            <option value="600" data-i18n="rule.time10"></option>
-          </select>
-        </label>
-        <label>
-          <span data-i18n="roomCode"></span>
-          <input id="roomCode" maxlength="7" inputmode="numeric" autocomplete="off" placeholder="0000" />
-        </label>
         <div class="buttons">
-          <button id="quickJoin" data-i18n="quickJoin"></button>
           <button id="start" class="primary" data-i18n="createRoom"></button>
         </div>
         <div class="buttons">
-          <button id="joinRoom" data-i18n="joinRoom"></button>
+          <button id="joinGame" data-i18n="joinRoom"></button>
+        </div>
+        <!-- 断线重连（FR-N5，v0.4.0）：对局中断线 30s 宽限内条件显示（等待房断线无宽限，不显示） -->
+        <div class="buttons">
+          <button id="rejoinBtn" class="hidden" data-i18n="lobby.rejoin"></button>
         </div>
         <button id="langBtn" class="lang"></button>
+      </div>
+
+      <!-- 加入房间弹窗（v0.4.0）：按房间号加入；Enter 提交 / Esc 或遮罩点击取消；错误内联提示 -->
+      <div id="joinDialog" class="hidden">
+        <div class="panel">
+          <h2 data-i18n="joinRoom"></h2>
+          <label>
+            <span data-i18n="roomCode"></span>
+            <input id="joinCode" maxlength="7" inputmode="numeric" autocomplete="off" placeholder="0000" />
+          </label>
+          <div id="joinError" class="hidden"></div>
+          <div class="buttons">
+            <button id="joinCancel" data-i18n="join.cancel"></button>
+            <button id="joinConfirm" class="primary" data-i18n="join.confirm"></button>
+          </div>
+        </div>
       </div>
     </div>
 

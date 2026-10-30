@@ -23,8 +23,8 @@
 ## 仓库与凭据（2026-10-18）
 - GitHub：`qonies/DoShoot`（**public**，2026-10-18 由 private 改为 public），remote origin 已配置，主分支 main
 - Release：**v0.3.1 已发布**（tag v0.3.1 + release notes，无构建产物 assets，内容覆盖 M3 系统完整 + M4 打磨完善）；历史 v0.2.5
-- **版本同步（2026-10-29）**：根与三个子包 package.json 同步至 **0.3.9**（头顶血条）；v0.3.2~v0.3.9 尚未发布 GitHub Release
-- 客户端构建 gzip ≈ 156KB（v0.3.9 实测 155.76KB；v0.3.8 155.37KB、v0.3.7 154.07KB、v0.3.6 153.9KB、M4 148.9KB）
+- **版本同步（2026-10-30）**：根与三个子包 package.json 同步至 **0.4.0**（首页精简与帮助菜单）；v0.3.2~v0.4.0 尚未发布 GitHub Release
+- 客户端构建 gzip ≈ 156KB（v0.4.0 实测 155.90KB；v0.3.9 155.76KB、v0.3.8 155.37KB、v0.3.7 154.07KB、v0.3.6 153.9KB、M4 148.9KB）
 - **开源协议：MIT**（2026-10-18 落地：根 LICENSE 文件 + 根 package.json `license: MIT` + README 协议章节与徽章；commit 269c9d9 已推送）
 - **GitHub 简介**（gh repo edit 已设置；2026-10-21 移除对标字眼）：浏览器多人在线俯视角射击游戏：TypeScript + Three.js + Socket.IO 权威服务端，快照插值/预测与和解/延迟补偿，武器解锁、Bot AI、中英双语。MIT 开源。另附 topics：game/multiplayer/threejs/socketio/typescript/websocket/shooter
 - 凭据助手配置在**仓库本地**：`git config credential.helper "!gh auth git-credential"`（gh CLI 已登录 qonies；本机 HOME 指向自定义目录导致 gh 无法写全局 .gitconfig，故用仓库级配置）

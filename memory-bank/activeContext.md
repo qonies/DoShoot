@@ -1,7 +1,19 @@
 # 活动上下文（Active Context）
 
 ## 当前焦点
-**v0.3.9 头顶血条已落地（2026-10-29）**：每个玩家/Bot 头顶悬浮实时血板（本地=预测血量每帧、远端=快照血量 ~28Hz，分段变色、死亡隐藏）——**iOS Safari 真机实测仍待验收**（上一迭代 v0.3.8 触屏双操作模式已落地）。
+**v0.4.0 首页精简与帮助菜单已落地（2026-10-30）**：大厅仅昵称+两个入口按钮（新建游戏→等待房间调参；加入游戏→房间号弹窗）；快速加入 UI 移除、断线重连改「回到上一局」条件按钮；操作提示移入 Esc 设置面板帮助区块 + 新增「返回首页」按钮——**浏览器手测（新建/加入弹窗/Esc 帮助与返回首页/重连按钮）与局域网多设备实测仍待验收**。
+
+## 最近变更（2026-10-30 · 首页精简与帮助菜单，v0.4.0）
+- **大厅精简**：`index.html` 删除 `#mode/#map/#difficulty/#killTarget/#timeLimit/#roomCode/#quickJoin`；「新建游戏」→ `createRoom({version,nickname,progress})` 参数全缺省（服务端默认 DEFAULT_MAP/normal/30杀/5min/BOT_COUNT_DEFAULT），房主在等待界面调参（FR-L8 成为参数唯一配置入口）
+- **加入房间弹窗 `#joinDialog`**（嵌在 #lobby 内复用 .panel 视觉，z-index 2）：`#joinCode` 输入 + `#joinError` 内联错误（本地 `join.codeInvalid` / 服务端 `net.roomNotFound`，不再走屏幕中央 #netmsg 避免压住弹窗）；Enter 提交、Esc/遮罩取消、打开自动聚焦
+- **断线重连改造（FR-N5）**：原「30s 内点快速加入回对局」路径随快速加入移除而消失 → 新增大厅条件按钮 `#rejoinBtn`（`lobby.rejoin`）：仅对局中断线 `offerRejoin()`（`RECONNECT_GRACE` 30s 定时 `clearRejoin()`）；等待房断线/主动离开立即 `clearRejoin()`（服务端等待态无宽限，不给虚假入口）；`net.disconnected` 文案更新
+- **main.ts 结构**：`startGame(kind: 'create'|'join'|'rejoin', roomCode?)` 收敛三分支；新增模块级 `activeNet: Net | null`（onRejected/onDisconnected/onConnectError/waitroom onLeave/WebGL 失败均置空，`===` 判等防旧 net 误清新 net）；`leaveMatchToLobby()` 统一「主动离开」（inGame=false → stopGameLoop → sendLeave/close → clearRejoin → backToLobby），结算面板 `onLeave` 与设置面板 `#setHome` 共用
+- **操作提示迁移（v0.3.9 重叠修复）**：HUD 删除 `#hint` 元素与 3 处 CSS 规则；设置面板新增 `.helpBlock`（`#helpHint`，`hint`/`hint.pad`/`hint.touch` 按设备与触屏模式），`hintElRef` 模块级指向 `#helpHint`（refreshLangUi/recreateTouchControls 刷新）；**顺带把 pad HUD 避让选择器 `body.pad` 收紧为 `body.touch.pad`**（桌面端血条回左下角，不再命中底部中央避让）
+- **设置面板**：底部按钮改 `#setHome`（返回首页，次要样式）+ `#setClose` 并排
+- **i18n 106→108 键**：+`join.confirm/join.cancel/join.codeInvalid/lobby.rejoin/set.controls/set.home`，−`quickJoin/mode/modeTdm/modeHardpoint`；`net.disconnected` 文案改指「回到上一局」
+- **边界**：服务端与协议零改动（JoinMsg 规则字段保留、服务端快速加入能力保留供 smoke:net）；版本号四处同步 0.3.9→**0.4.0**
+- 验证：typecheck / unit 145 / check:i18n（108 键）/ smoke:net ALL PASS / smoke:server / build（gzip 155.90KB）全过；**手测待做**（新建→等待房调参开局、弹窗错号/正确号、Esc 帮助提示+返回首页、断线 30s 内重连按钮、触屏设置按钮可达性）
+- ⚠️ 已知既有问题（未修）：结算面板（z-index 15）打开时 Esc 设置面板（z-index 14）被压在其下；服务端 join 的 rejoinId 失败会静默回落快速加入建房（客户端 30s 定时隐藏按钮使该窗口极小）
 
 ## 最近变更（2026-10-29 · 头顶血条，v0.3.9）
 - **实现**：`game/entities.ts`——新增 `HealthBar`（底板 1.1×0.16 深色 + 填充板 1.02×0.10，`PlaneGeometry.translate` 左端锚定 → `scale.x = hp%`；俯仰角 `HP_BAR_TILT = -atan2(22,12)` 与 GameScene 相机（y=22/z+12）匹配正对视角）；`syncHealthBar()` 宽度/颜色仅在变化时改写（阈值 0.004 / 分段 >55 绿 0x4caf50、26~55 橙 0xffb74d、≤25 红 0xe57373）
