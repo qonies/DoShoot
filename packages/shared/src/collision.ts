@@ -2,6 +2,7 @@
 
 import type { GameMap } from './map';
 import { isWall } from './map';
+import { DASH_SUBSTEP } from './constants';
 
 export interface AABB {
   minX: number;
@@ -59,6 +60,36 @@ export function resolveCircleWalls(map: GameMap, x: number, y: number, r: number
     }
   }
   return { x: nx, y: ny };
+}
+
+/**
+ * 滑铲位移（FR-C7，v0.4.1）：沿 (dirX, dirY) 归一化方向瞬时位移 distance 世界单位，
+ * 分 DASH_SUBSTEP 小步逐段做圆-墙碰撞推出——确定性纯函数，服务端权威与客户端预测/和解重放
+ * 共用同一实现（两端输入相同则结果逐位一致，和解无拖影）。方向为零向量时原地不动。
+ */
+export function dashMove(
+  map: GameMap,
+  x: number,
+  y: number,
+  dirX: number,
+  dirY: number,
+  r: number,
+  distance: number,
+): ResolveResult {
+  const len = Math.hypot(dirX, dirY);
+  if (!Number.isFinite(len) || len <= 1e-9) return { x, y };
+  const ux = dirX / len;
+  const uy = dirY / len;
+  const steps = Math.max(1, Math.ceil(distance / DASH_SUBSTEP));
+  const stepLen = distance / steps;
+  let cx = x;
+  let cy = y;
+  for (let i = 0; i < steps; i++) {
+    const res = resolveCircleWalls(map, cx + ux * stepLen, cy + uy * stepLen, r);
+    cx = res.x;
+    cy = res.y;
+  }
+  return { x: cx, y: cy };
 }
 
 /**

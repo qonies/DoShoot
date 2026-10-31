@@ -13,7 +13,6 @@ import {
   normalizeRoomCode,
   type SnapshotMsg,
   type WelcomeMsg,
-  type WeaponId,
 } from '@DoShoot/shared';
 import { applyDom, getLang, setLang, t, toggleLang } from './i18n';
 import { GameScene } from './game/scene';
@@ -30,8 +29,11 @@ import { clientToNdc, isTouchDevice } from './game/touchmath';
 import { applyAudioSettings, loadSettings, saveSettings, type GameSettings } from './settings';
 
 const NICKNAME_KEY = 'DoShoot.nickname';
-const PROGRESS_KEY = 'DoShoot.progress';
 const PLAYER_ID_KEY = 'DoShoot.playerId';
+/** 最近房间记录（FR-L4 v0.4.1 恢复快速加入）：{ code, at }，at = 离开房间的时刻；
+ *  仅「刚退出不久」（TTL 内）在大厅显示「快速加入」按钮，点击免输房间号直回该房间 */
+const RECENT_ROOM_KEY = 'DoShoot.recentRoom';
+const RECENT_ROOM_TTL_MS = 180_000;
 /** 上行输入发送频率（FR-N1/N2 配套） */
 const INPUT_SEND_RATE = 30;
 /** 触屏设备（FR-U6）：粗指针（手机/平板）或存在触摸面；决定摇杆/按钮与提示文案 */
@@ -58,13 +60,14 @@ function refreshLangUi(): void {
   langBtn.textContent = getLang() === 'zh' ? 'EN' : '中文';
   // 触屏端按当前操作模式显示提示（pad=D-pad+点击射击 / stick=双摇杆），桌面端显示键位提示
   if (hintElRef) hintElRef.textContent = TOUCH ? touchHintText() : t('hint');
+  refreshRecentRoomUi(); // 快速加入按钮文案不走 data-i18n（含动态房间号），随语言刷新
 }
 
 /** 触屏操作提示文案按当前模式选择（FR-U6 双模式） */
 function touchHintText(): string {
   return settings.touchMode === 'stick' ? t('hint.touch') : t('hint.pad');
 }
-refreshLangUi();
+// 初始 UI 刷新推迟到快速加入按钮（#quickJoin）就绪之后（refreshLangUi 内会刷新其文案）
 langBtn.addEventListener('click', () => {
   toggleLang();
   refreshLangUi();
@@ -136,11 +139,13 @@ function cancelRejoinUi(): void {
 function clearRejoin(): void {
   cancelRejoinUi();
   sessionStorage.removeItem(PLAYER_ID_KEY);
+  refreshRecentRoomUi(); // 重连窗口结束 → 恢复「快速加入」可见性判定
 }
 
 function offerRejoin(): void {
   if (!sessionStorage.getItem(PLAYER_ID_KEY)) return;
   rejoinBtn.classList.remove('hidden');
+  refreshRecentRoomUi(); // 重连窗口内隐藏「快速加入」（回到上一局语义更优）
   if (rejoinTimer === null) {
     rejoinTimer = setTimeout(clearRejoin, RECONNECT_GRACE * 1000);
   }
@@ -160,21 +165,81 @@ window.addEventListener('keydown', (e) => {
   closeJoinDialog();
 });
 
-// 武器解锁进度（FR-A1：localStorage 本地持久层，跨局保留成长）
-function loadProgress(): Partial<Record<WeaponId, number>> {
-  try {
-    return JSON.parse(localStorage.getItem(PROGRESS_KEY) ?? '{}') as Partial<Record<WeaponId, number>>;
-  } catch {
-    return {};
-  }
+// 武器解锁进度（FR-A1 v0.4.1 调整）：不再本地持久化——每次新游戏全员从最初级开始升级，
+// 浏览器不记忆历史层级；清理旧版本遗留的 localStorage 键，防止旧数据残留造成误解
+try {
+  localStorage.removeItem('DoShoot.progress');
+} catch {
+  /* localStorage 不可用时忽略 */
 }
-function saveProgress(p: Partial<Record<WeaponId, number>>): void {
+
+// ---------- 最近房间（FR-L4 快速加入，v0.4.1 恢复） ----------
+// 进入房间时记 code（lastRoomCode），回到大厅时落 { code, at: 离开时刻 }；
+// TTL 内在大厅显示「快速加入 · 房间 XXXX」，点击 startGame('join', code) 免输房间号直回。
+// 房间被回收（空房 60s）/ 号失效时由 joinRejected 'noRoom' 清记录并隐藏。
+const quickJoinBtn = document.querySelector<HTMLButtonElement>('#quickJoin')!;
+let lastRoomCode: string | null = null;
+let recentTimer: ReturnType<typeof setTimeout> | null = null;
+
+function loadRecentRoom(): { code: string; at: number } | null {
   try {
-    localStorage.setItem(PROGRESS_KEY, JSON.stringify(p));
+    const raw = JSON.parse(localStorage.getItem(RECENT_ROOM_KEY) ?? 'null') as {
+      code?: unknown;
+      at?: unknown;
+    } | null;
+    if (raw && typeof raw.code === 'string' && typeof raw.at === 'number') {
+      return { code: raw.code, at: raw.at };
+    }
   } catch {
     /* localStorage 不可用时忽略 */
   }
+  return null;
 }
+
+function saveRecentRoom(code: string): void {
+  try {
+    localStorage.setItem(RECENT_ROOM_KEY, JSON.stringify({ code, at: Date.now() }));
+  } catch {
+    /* localStorage 不可用时忽略 */
+  }
+  if (recentTimer !== null) clearTimeout(recentTimer);
+  recentTimer = setTimeout(refreshRecentRoomUi, RECENT_ROOM_TTL_MS); // 到期自动收起按钮
+}
+
+function clearRecentRoom(): void {
+  lastRoomCode = null;
+  try {
+    localStorage.removeItem(RECENT_ROOM_KEY);
+  } catch {
+    /* localStorage 不可用时忽略 */
+  }
+  if (recentTimer !== null) {
+    clearTimeout(recentTimer);
+    recentTimer = null;
+  }
+}
+
+/** 快速加入按钮可见性/文案：TTL 内 + 未处于「回到上一局」重连窗口（重连语义更优，优先展示） */
+function refreshRecentRoomUi(): void {
+  const recent = loadRecentRoom();
+  const fresh = recent !== null && Date.now() - recent.at < RECENT_ROOM_TTL_MS;
+  if (!fresh || rejoinTimer !== null) {
+    quickJoinBtn.classList.add('hidden');
+    return;
+  }
+  quickJoinBtn.textContent = t('lobby.quickJoin').replace('{code}', recent!.code);
+  quickJoinBtn.classList.remove('hidden');
+}
+
+quickJoinBtn.addEventListener('click', () => {
+  const recent = loadRecentRoom();
+  if (!recent || Date.now() - recent.at >= RECENT_ROOM_TTL_MS) {
+    refreshRecentRoomUi(); // 记录已过期（防御）：刷新 UI 收起按钮
+    return;
+  }
+  startGame('join', recent.code);
+});
+refreshLangUi(); // 初始 UI 刷新（语言按钮/操作提示/快速加入按钮文案），DOM 钩子此时已全部就绪
 
 const netmsgEl = document.querySelector<HTMLElement>('#netmsg')!;
 function showNetMsg(key: string): void {
@@ -238,6 +303,8 @@ function startGame(kind: 'create' | 'join' | 'rejoin', roomCode?: string): void 
         return;
       }
       cancelRejoinUi(); // 已进入房间/对局：收起重连入口（凭据保留，供本次对局断线重连）
+      // 记录所在房间（FR-L4 快速加入）：回到大厅时落 { code, at: 离开时刻 }
+      if (welcome.room) lastRoomCode = welcome.room.code;
       // 等待房间（FR-L8）：建房/按房间号加入后先进入等待界面，开局时服务端重发
       // welcome(room.state='running') 再走下方进局分支（复用全部既有进局链路）
       if (welcome.room?.state === 'waiting') {
@@ -266,7 +333,13 @@ function startGame(kind: 'create' | 'join' | 'rejoin', roomCode?: string): void 
       connecting = false;
       net.close(); // 被拒后关闭连接，避免空闲 socket 泄漏（重试会新建 Net）
       if (activeNet === net) activeNet = null;
+      if (reason === 'noRoom') {
+        // 快速加入/房间号加入失败（房间已回收或不存在）：清除最近房间记录，按钮不再展示
+        lastRoomCode = null;
+        clearRecentRoom();
+      }
       backToLobby();
+      refreshRecentRoomUi();
       showNetMsg(
         reason === 'full'
           ? 'net.roomFull'
@@ -316,12 +389,13 @@ function startGame(kind: 'create' | 'join' | 'rejoin', roomCode?: string): void 
   // 服务端默认，等待界面内由房主调整）；加入游戏 → join + roomCode；回到上一局 → join + rejoinId
   //（服务端 tryRejoin 分支恢复原实体；规则字段仅在服务端需要建房时生效，此处一律不传）
   if (kind === 'create') {
-    net.createRoom({ version: PROTOCOL_VERSION, nickname, progress: loadProgress() });
+    // 新建游戏（FR-L8）：参数缺省走服务端默认，房主在等待界面调整；
+    // 武器解锁进度不再上报（FR-A1 v0.4.1：按局重置，服务端不接受基线）
+    net.createRoom({ version: PROTOCOL_VERSION, nickname });
   } else {
     net.join({
       version: PROTOCOL_VERSION,
       nickname,
-      progress: loadProgress(),
       rejoinId: sessionStorage.getItem(PLAYER_ID_KEY),
       ...(roomCode !== undefined ? { roomCode } : {}),
     });
@@ -354,6 +428,8 @@ function exitWaitRoom(): void {
 }
 
 function backToLobby(): void {
+  // 最近房间落盘（FR-L4 快速加入）：从房间回到大厅 = 「刚退出」，以当前时刻起算 TTL
+  if (lastRoomCode !== null) saveRecentRoom(lastRoomCode);
   // 关闭/复位全部对局内覆盖层：断线时可能正打开结算/计分板/重生遮罩/解锁横幅，
   // 不复位会随 #hud 一起被隐藏，但下一局 showGameLoop 后残留显示（stopGameLoop 已移除 keyup 监听无法再收起）
   for (const id of ['settings', 'scoreboard', 'settlement', 'respawn', 'unlockBanner']) {
@@ -365,6 +441,7 @@ function backToLobby(): void {
   closeJoinDialog(); // 加入房间弹窗（v0.4.0）：残留时复位（重连凭据/按钮状态由调用方管理）
   document.querySelector('#lobby')!.classList.remove('hidden');
   document.querySelector('#hud')!.classList.add('hidden');
+  refreshRecentRoomUi(); // 快速加入按钮（FR-L4）：按最近房间记录刷新可见性/文案
 }
 
 /** 设置/结算面板开关状态 → body.ui-open（体检修复批次 3）：
@@ -513,13 +590,6 @@ function runGameLoop(net: Net, welcome: WelcomeMsg): () => void {
     },
     // FR-W1：本人解锁 → 全屏提示
     onUnlock: (nameKey) => hud.showUnlock(`${t('unlock.prefix')}${t(nameKey)}`),
-    // FR-A1：本人击杀 → localStorage 进度累计（跨局保留成长）；彩蛋冲锋枪不计入（FR-E1）
-    onOwnKill: (classId) => {
-      if (classId === 'rush') return;
-      const p = loadProgress();
-      p[classId] = (p[classId] ?? 0) + 1;
-      saveProgress(p);
-    },
     // FR-M4/L7：结算面板 + 再来一局/返回大厅（killTarget 供「达到 X 杀」文案）
     onMatchEnd: (reason, standings, kt) => {
       hud.showSettlement(reason, standings, world.selfId, kt);
@@ -597,6 +667,7 @@ function runGameLoop(net: Net, welcome: WelcomeMsg): () => void {
       if (tcmd.firePressed) cmd.firePressed = true;
       if (tcmd.reload) cmd.reload = true;
       if (tcmd.switchNext) cmd.switchTo = nextWeaponId(world.inv.current, 1); // 循环切换（与滚轮同源）
+      if (tcmd.dash) cmd.dash = tcmd.dash; // D-pad 双击滑铲（FR-C7，pad 模式）
     }
     // 瞄准（FR-U6 双模式）：stick = 玩家位置 + 摇杆方向 × 固定距离；pad = 点击/拖动的屏幕位置
     // 投影到地面世界点（精度等同鼠标）；none = 本帧无触屏瞄准输入（保持上一帧瞄准点）；
@@ -614,10 +685,11 @@ function runGameLoop(net: Net, welcome: WelcomeMsg): () => void {
     if (cmd.cheatRush) net.sendRush(CHEAT_RUSH_CODE);
     world.update(dt, cmd, aim.x, aim.y);
 
-    // 上行输入节流（~30Hz，FR-N1）
+    // 上行输入节流（~30Hz，FR-N1）：扣减而非清零 → 发送节奏不受帧率量化漂移影响，
+    // 与服务端 30Hz tick 相位误差最小化（减少和解修正幅度，v0.4.2 画面平滑）
     inputAcc += dt;
     if (inputAcc >= 1 / INPUT_SEND_RATE) {
-      inputAcc = 0;
+      inputAcc -= 1 / INPUT_SEND_RATE;
       net.sendInput(world.buildInput(cmd, aim.x, aim.y));
     }
 
@@ -654,7 +726,7 @@ function runGameLoop(net: Net, welcome: WelcomeMsg): () => void {
     hud.update(dt);
 
     gameScene.update(dt);
-    gameScene.follow(world.local.x, world.local.y);
+    gameScene.follow(world.local.viewX, world.local.viewY); // 相机跟视觉位置（滑铲平滑追上，FR-C7）
     minimap.update(world.local.x, world.local.y, world.local.angle); // 小地图（FR-U2，M4）
     gameScene.render();
 

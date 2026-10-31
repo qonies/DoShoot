@@ -3,6 +3,9 @@
 
 import * as THREE from 'three';
 import {
+  DASH_COOLDOWN,
+  DASH_DISTANCE,
+  DASH_TOTAL_TIME,
   INTERP_DELAY,
   MATCH_KILL_TARGET,
   PLAYER_RADIUS,
@@ -10,6 +13,8 @@ import {
   PROTOCOL_VERSION,
   RESPAWN_DELAY,
   WeaponInventory,
+  dashMove,
+  dashProgress,
   nextWeaponId,
   resolveCircleWalls,
   resolveShot,
@@ -26,6 +31,7 @@ import {
 import { GameScene } from './scene';
 import { sfx } from './audio';
 import { LocalPlayer, RemoteEntity } from './entities';
+import { CORRECTION_SMOOTH_MAX, isSmoothableCorrection } from './smoothing';
 import type { InputCommand } from './input';
 
 export interface WorldCallbacks {
@@ -34,8 +40,6 @@ export interface WorldCallbacks {
   onPlayerHitEnemy(dmg: number, killed: boolean, wx: number, wy: number): void;
   /** 本人对某武器类解锁新层级（FR-W1 全屏提示） */
   onUnlock(nameKey: string): void;
-  /** 本人击杀（FR-A1：客户端按类累计并持久化到 localStorage） */
-  onOwnKill(classId: WeaponId): void;
   /** 对局结束（FR-M4 结算面板） */
   onMatchEnd(reason: 'kills' | 'time', standings: StandingRow[], killTarget?: number): void;
   /** 再来一局重置（FR-M4：关闭结算面板） */
@@ -112,13 +116,23 @@ export class NetWorld {
   /** 待上报的切枪意图（数字键直选 / 滚轮折算，FR-W4）：经 buildInput 发送后清空。
    *  修复：滚轮切枪此前只改本地预测、从不上报服务端，~250ms 后被权威 weaponId 和解「切回」 */
   private pendingSwitch: WeaponId | null = null;
+  /** 待上报的滑铲意图（FR-C7）：双击触发时记账，在 buildInput（实际发送点）启动本地滑铲状态
+   *  并随该条输入上报——与服务端「消费该输入时启动滑铲」的时序最接近 */
+  private pendingDash: { x: number; y: number } | null = null;
+  /** 进行中的本地滑铲（FR-C7 分阶段滑行）：与服务端同一 dashProgress 曲线逐帧推进；
+   *  滑铲期间跳过权威位置对齐（中途硬对齐会被自身滑行进度拉回产生橡皮筋） */
+  private localDash: { dirX: number; dirY: number; startedAt: number; applied: number } | null = null;
+  /** 本地滑铲冷却截止时刻（本地渲染时钟秒，FR-C7）：与服务端 DASH_COOLDOWN 同值，
+   *  冷却期内的双击不再记账/不再启动本地滑铲（服务端会拒绝） */
+  private localDashReadyAt = 0;
   /** 已上报但未被服务端快照确认的切枪（FR-E1 防闪烁，体检修复批次 3）：
    *  pendingSwitch 在 buildInput 上报后立即清空，此后到达的旧快照可能仍带 rush=true——
    *  仅靠它防不住闪烁（窗口 ≈ 一个上行周期 ~33ms）。确认窗口内不回授 rush，
    *  避免「本地放弃 → 旧快照重新授予 → 重复全屏横幅/音效」；确认或超时后解除 */
   private switchAckPending: WeaponId | null = null;
   private switchAckAt = 0;
-  /** 已发送但未被服务端确认的输入（快照和解时重放，FR-N4） */
+  /** 已发送但未被服务端确认的输入（快照和解时重放，FR-N4）。
+   *  注意：滑铲进行中发送的输入记录 moveX/moveY = 0（服务端滑铲期屏蔽常规移动，重放需一致） */
   private pendingInputs: Array<{ seq: number; moveX: number; moveY: number; dt: number }> = [];
   /** 距上次发送输入累计的真实 dt */
   private inputDtAcc = 0;
@@ -197,9 +211,16 @@ export class NetWorld {
     this.inputDtAcc += dt;
     this.inv.update(this.localTime);
     this.recoilBloom = Math.max(0, this.recoilBloom - BLOOM_DECAY * dt);
+    // 滑铲视觉平滑（FR-C7）：表现网格/镜头经衰减偏移追上物理位置
+    this.local.decayVisual(dt);
 
     if (this.local.alive) {
-      this.predictMovement(cmd, dt);
+      // 滑铲意图记账（FR-C7）：方向非零、未在滑铲且本地冷却结束时接受；实际启动在 buildInput（发送点）
+      if (cmd.dash && this.localDash === null && this.localTime >= this.localDashReadyAt) {
+        this.pendingDash = cmd.dash;
+      }
+      const dashing = this.advanceLocalDash();
+      if (!dashing) this.predictMovement(cmd, dt); // 滑铲期方向锁定，屏蔽常规移动（与服务端一致）
       this.predictAim(aimX, aimY);
       this.predictFire(cmd);
       this.handleSwitchAndReload(cmd);
@@ -215,16 +236,25 @@ export class NetWorld {
   /** 组装上行输入（~30Hz 由主循环节流调用） */
   buildInput(cmd: InputCommand, aimX: number, aimY: number): InputMsg {
     const alive = this.local.alive;
+    // 滑铲启动（FR-C7）：在发送点建立本地滑铲状态（与服务端消费该输入的时序最接近），
+    // 位移由 advanceLocalDash 逐帧按 dashProgress 曲线推进；音效/轻震在此一次性触发
+    let dash: { x: number; y: number } | undefined;
+    if (alive && this.pendingDash !== null) {
+      dash = this.startLocalDash(this.pendingDash);
+      this.pendingDash = null;
+    }
+    const dashing = this.localDash !== null; // 本条输入发送时是否在滑铲（服务端会屏蔽其常规移动）
     const msg: InputMsg = {
       seq: ++this.seq,
-      moveX: alive ? cmd.moveX : 0,
-      moveY: alive ? cmd.moveY : 0,
+      moveX: alive && !dashing ? cmd.moveX : 0,
+      moveY: alive && !dashing ? cmd.moveY : 0,
       aimX,
       aimY,
       firing: alive && cmd.firing,
       firePressed: this.firePressesPending,
       reload: alive && cmd.reload,
       switchTo: alive ? this.pendingSwitch : null,
+      ...(dash !== undefined ? { dash } : {}),
     };
     this.firePressesPending = 0;
     if (alive && this.pendingSwitch !== null) {
@@ -234,12 +264,46 @@ export class NetWorld {
     }
     this.pendingSwitch = null;
     if (alive) {
-      // 记录该条输入及其覆盖的 dt，供快照和解重放（FR-N4）
+      // 记录该条输入及其覆盖的 dt，供快照和解重放（FR-N4）；
+      // 滑铲期输入已在 msg 中记 0 移动（与服务端屏蔽行为一致，重放不会多走）
       if (this.pendingInputs.length >= MAX_PENDING_INPUTS) this.pendingInputs.shift();
       this.pendingInputs.push({ seq: msg.seq, moveX: msg.moveX, moveY: msg.moveY, dt: this.inputDtAcc });
     }
     this.inputDtAcc = 0;
     return msg;
+  }
+
+  /** 启动本地滑铲（FR-C7 分阶段滑行）：在发送点建立状态（与服务端消费该输入的时序最接近），
+   *  位移由 advanceLocalDash 逐帧按 dashProgress 曲线推进；表现反馈（音效/轻震）在此一次性触发。
+   *  返回实际上报的方向向量 */
+  private startLocalDash(dir: { x: number; y: number }): { x: number; y: number } {
+    this.localDash = { dirX: dir.x, dirY: dir.y, startedAt: this.localTime, applied: 0 };
+    this.localDashReadyAt = this.localTime + DASH_COOLDOWN;
+    sfx.dash();
+    this.scene.addShake(0.08);
+    return { x: dir.x, y: dir.y };
+  }
+
+  /** 逐帧推进本地滑铲（FR-C7）：目标累计距离 = DASH_DISTANCE × dashProgress(elapsed)
+   *  （shared 解析积分，与服务端 tick 同一函数、与步长无关），差量经 dashMove 分段碰撞位移
+   *  （撞墙即停、不穿墙）；DASH_TOTAL_TIME 后结束。返回是否仍在滑铲 */
+  private advanceLocalDash(): boolean {
+    const d = this.localDash;
+    if (d === null) return false;
+    const elapsed = this.localTime - d.startedAt;
+    const target = DASH_DISTANCE * dashProgress(elapsed);
+    const delta = target - d.applied;
+    if (delta > 0) {
+      const r = dashMove(this.map, this.local.x, this.local.y, d.dirX, d.dirY, PLAYER_RADIUS, delta);
+      this.local.x = r.x;
+      this.local.y = r.y;
+      d.applied = target;
+    }
+    if (elapsed >= DASH_TOTAL_TIME) {
+      this.localDash = null;
+      return false;
+    }
+    return true;
   }
 
   /** 自身距重生的剩余秒数（存活时为 0） */
@@ -270,17 +334,42 @@ export class NetWorld {
         this.switchAckPending = null;
         this.recoilBloom = 0;
         this.pendingInputs = [];
+        this.local.resetVisual(); // 复活为瞬移：不做视觉平滑（死亡时已清，防御性再清一次）
         this.syncRush(e);
+        return;
+      }
+      // 滑铲进行中（FR-C7 分阶段滑行）：位置由本地滑铲曲线驱动，跳过权威位置对齐——
+      // 中途硬对齐会被自身滑行进度拉回产生橡皮筋；服务端同曲线推进，滑铲结束后的
+      // 首次对齐差值（≈单向延迟的相位差）由视觉平滑吸收。此处仅推进 ack，不动位置
+      if (this.localDash !== null) {
+        while (this.pendingInputs.length > 0 && this.pendingInputs[0]!.seq <= e.lastSeq) {
+          this.pendingInputs.shift();
+        }
         return;
       }
       // 位置和解（FR-N4）：对齐权威位置，再重放服务端尚未消费的输入
       //（替代朴素 lerp/吸附——消除快照滞后于本地预测造成的稳态拖影/橡皮筋）
+      const prevX = this.local.x;
+      const prevY = this.local.y;
       while (this.pendingInputs.length > 0 && this.pendingInputs[0]!.seq <= e.lastSeq) {
         this.pendingInputs.shift();
       }
       this.local.x = e.x;
       this.local.y = e.y;
-      for (const p of this.pendingInputs) this.moveBy(p.moveX, p.moveY, p.dt);
+      for (const p of this.pendingInputs) {
+        this.moveBy(p.moveX, p.moveY, p.dt);
+      }
+      // 和解修正走表现层平滑（v0.4.2 画面优化）：服务端 30Hz 定步 vs 客户端连续预测的相位差
+      // 会让快照位置每 ~35ms 阶跃修正一次（实测平均 ~0.075 单位 ≈ 4px）——把差值转成衰减视觉
+      // 偏移，相机/网格连续追上，消除移动中的画面抖动。物理位置仍为权威（瞄准/命中不受影响）；
+      // 超过 RECONCILE_SMOOTH_MAX 的位移（瞬移/换图等）直接对齐，不做跨图拖影
+      const cdx = this.local.x - prevX;
+      const cdy = this.local.y - prevY;
+      if (isSmoothableCorrection(cdx, cdy, CORRECTION_SMOOTH_MAX)) {
+        this.local.addVisualOffset(cdx, cdy); // 视觉落后该修正量，随 decayVisual 连续追上
+      } else {
+        this.local.resetVisual();
+      }
       this.local.hp = e.hp;
       this.local.kills = e.kills;
       // 冲锋枪彩蛋模式权威同步（FR-E1）：先于武器校正，grantRush 后 current='rush' 与快照一致
@@ -321,6 +410,9 @@ export class NetWorld {
       this.pendingInputs = [];
       this.firePressesPending = 0;
       this.switchAckPending = null;
+      this.pendingDash = null;
+      this.localDash = null; // 死亡中断滑铲（服务端 respawn 同样清空）
+      this.local.resetVisual();
     }
   }
 
@@ -351,10 +443,7 @@ export class NetWorld {
     for (const ev of events) {
       if (ev.type === 'kill') {
         this.cb.onKill(ev.killerName, ev.victimName, ev.weaponId);
-        if (ev.killerId === this.localId) {
-          this.cb.onOwnKill(ev.weaponId); // FR-A1：本人击杀 → 客户端持久化进度
-          sfx.kill();
-        }
+        if (ev.killerId === this.localId) sfx.kill();
         if (ev.victimId === this.localId) this.playerKillerName = ev.killerName;
       } else if (ev.type === 'hit') {
         if (ev.shooterId === this.localId) {
@@ -389,6 +478,12 @@ export class NetWorld {
         this.firePressesPending = 0;
         this.weaponMismatchSince = null;
         this.switchAckPending = null;
+        // 武器解锁进度按局重置（FR-A1 v0.4.1）：与服务端 rematch/resetProgression 同源，
+        // 预测侧库存回最初级（后续 unlock 事件从 0 重新累积）
+        this.inv.resetTiers();
+        this.pendingDash = null;
+        this.localDash = null; // 新局取消进行中的滑铲
+        this.local.resetVisual();
         this.cb.onMatchReset();
       }
     }

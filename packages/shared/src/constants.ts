@@ -11,6 +11,21 @@ export const PLAYER_SPEED = 6;
 /** 玩家碰撞半径 */
 export const PLAYER_RADIUS = 0.4;
 
+/** 滑铲（FR-C7）：总滑行距离（世界单位）与三段速度剖面时长（秒）——
+ *  助跑加速（RAMP）→ 匀速滑行（GLIDE）→ 减速到停（DECEL）。位移在 DASH_TOTAL_TIME 内按
+ *  共享速度曲线走完（shared dash.ts 解析积分，两端与步长无关），峰值速度 ≈ 2×常规移速。
+ *  v0.4.1 追加：由「瞬时位移」改为分阶段滑行（助跑/滑行/减速/停止），服务端权威状态机推进 */
+export const DASH_DISTANCE = 3.5;
+export const DASH_RAMP_TIME = 0.1;
+export const DASH_GLIDE_TIME = 0.16;
+export const DASH_DECEL_TIME = 0.14;
+/** 滑铲总时长（秒）：助跑 + 滑行 + 减速 */
+export const DASH_TOTAL_TIME = DASH_RAMP_TIME + DASH_GLIDE_TIME + DASH_DECEL_TIME;
+/** 滑铲冷却（秒，FR-C7）：自滑铲开始起算，服务端权威计时，客户端本地预测同一数值 */
+export const DASH_COOLDOWN = 1.5;
+/** 滑铲位移碰撞子步长（世界单位/步，FR-C7）：每步 < 玩家半径，保证不穿墙 */
+export const DASH_SUBSTEP = 0.2;
+
 /** 玩家生命上限（FR-C3：HP 100，V1 不做护甲） */
 export const PLAYER_HP = 100;
 /** 死亡后重生延迟（秒，FR-C4：2~3s） */
@@ -20,8 +35,10 @@ export const HITBOX_HALF = 0.45;
 
 /** 网络协议版本（见 FR-N7）：v3 = 等待房间生命周期（FR-L8）——
  *  进房后可能停留在「等待开局」而非直接进对局，旧客户端语义不再兼容（会卡在无快照的房间），
- *  升版让旧页面收到明确的「版本不一致，请刷新」而非静默卡死 */
-export const PROTOCOL_VERSION = 3;
+ *  升版让旧页面收到明确的「版本不一致，请刷新」而非静默卡死；
+ *  v4（v0.4.1，FR-C7/A1）：武器解锁进度改为按局重置（服务端不再接受进房基线上报），
+ *  InputMsg 增量可选字段 dash?（滑铲意图）。旧页面若仍上报 progress 会被忽略并显示错误解锁层级，故升版提示刷新 */
+export const PROTOCOL_VERSION = 4;
 /** 服务端固定步长模拟频率（见 FR-N2） */
 export const SIM_TICK_RATE = 30;
 /** 快照广播频率下/上限（Hz）：广播间隔 = 1000/MAX（每次唤醒聚合多步事件），下限由冒烟断言校验 */

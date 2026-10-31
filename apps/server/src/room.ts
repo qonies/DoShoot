@@ -4,6 +4,9 @@ import {
   BOT_COUNT_DEFAULT,
   BOT_COUNT_OPTIONS,
   CHEAT_RUSH_CODE,
+  DASH_COOLDOWN,
+  DASH_DISTANCE,
+  DASH_TOTAL_TIME,
   HITBOX_HALF,
   INTERP_DELAY,
   KILL_TARGET_OPTIONS,
@@ -24,6 +27,8 @@ import {
   WEAPON_ORDER,
   WeaponInventory,
   damageAtRange,
+  dashMove,
+  dashProgress,
   getMap,
   pickSpawnFarthest,
   resolveCircleWalls,
@@ -62,8 +67,6 @@ const MAX_PENDING_PRESSES = 3;
 /** 输入超时（秒，NFR-5）：超过该时长未收到玩家输入则清空最后意图——
  *  防止客户端切后台/网络卡顿/恶意停发时，「最后一条 firing=true/moveX=1」被无限沿用 */
 const INPUT_TIMEOUT = 0.25;
-/** 客户端上报武器进度的单类击杀上限（FR-A1 信任基线的加固，防伪造直接满级） */
-const MAX_REPORTED_CLASS_KILLS = 999;
 /** 单次 interval 唤醒最多推进的模拟步数（超过则丢弃积压，防追步风暴） */
 const MAX_STEPS_PER_FRAME = 8;
 
@@ -101,6 +104,11 @@ export interface SimFighter {
   nextFireAt: number;
   /** 客户端最近 RTT（ms，延迟补偿回溯 FR-N4 用；Bot 恒 0） */
   pingMs: number;
+  /** 滑铲冷却截止的模拟时间（秒，FR-C7）：期内收到的 dash 意图被忽略 */
+  dashReadyAt: number;
+  /** 进行中的滑铲状态（FR-C7 分阶段滑行）：方向锁定 + 开始时刻 + 已走距离；
+   *  每 tick 按 dashProgress 推进，DASH_TOTAL_TIME 后置 null。null = 未在滑铲 */
+  dash: { dirX: number; dirY: number; startedAt: number; applied: number } | null;
   /** 最近一次收到该玩家输入的模拟时间（输入超时保护 INPUT_TIMEOUT 用） */
   lastInputAt: number;
   /** 位置历史（延迟补偿回溯，M4）：每 tick 记录，容量 ≈ LAG_COMP_HISTORY 秒 */
@@ -217,10 +225,9 @@ export class Room {
     return this.playerCount < ROOM_CAPACITY;
   }
 
-  addPlayer(id: string, name: string, progress?: Partial<Record<WeaponId, number>>, asHost = false): void {
+  addPlayer(id: string, name: string, asHost = false): void {
     const wasEmpty = this.playerCount === 0;
     const f = this.createFighter(id, name, false);
-    this.applyProgress(f, progress);
     this.fighters.set(id, f);
     this.inputs.set(id, []);
     // 空房复用（FR-N6 回收等待期 ≤60s / 首名玩家）：重置对局——不把上一场的 matchStart
@@ -241,6 +248,19 @@ export class Room {
     this.matchStart = this.time;
     this.lastMatchEnd = null;
     this.pendingEvents = this.pendingEvents.filter((e) => e.type !== 'matchReset');
+    this.resetProgression();
+  }
+
+  /** 武器解锁进度按局重置（FR-A1 v0.4.1）：新局（开局/空房复用/再来一局）全员回最初级——
+   *  本局各类击杀清零、层级清零、库存层级覆盖清空。跨局持久化已取消（浏览器不记忆） */
+  private resetProgression(): void {
+    for (const f of this.fighters.values()) {
+      for (const wid of WEAPON_ORDER) {
+        f.classKills[wid] = 0;
+        f.tier[wid] = 0;
+      }
+      f.inv.resetTiers();
+    }
   }
 
   removePlayer(id: string): void {
@@ -270,6 +290,7 @@ export class Room {
     f.input.moveY = 0;
     f.input.firing = false;
     f.firePresses = 0;
+    f.dash = null; // 断线残影取消滑铲（滑行期输入不可用，防止残影继续位移）
     const q = this.inputs.get(id);
     if (q) q.length = 0;
   }
@@ -378,7 +399,8 @@ export class Room {
     return true;
   }
 
-  /** 再来一局（FR-M4）：kills/deaths 清零、全员重生重置；武器解锁进度（生涯计数）保留 */
+  /** 再来一局（FR-M4）：kills/deaths 清零、全员重生重置；武器解锁进度按局重置（FR-A1 v0.4.1：
+   *  新一局即新游戏，全员回最初级，不再保留「生涯计数」） */
   rematch(): boolean {
     if (this.state !== 'running' || !this.matchOver) return false;
     this.matchOver = false;
@@ -393,22 +415,9 @@ export class Room {
       // 不被宽限清扫、也无法再凭 rejoinId 回来。其 K/D 照常清零，宽限内重连即以 0 杀
       // 随新局重生（step 的重生判定不区分断线）；未重连则照常被宽限清扫移除。
     }
+    this.resetProgression();
     this.pendingEvents.push({ type: 'matchReset' });
     return true;
-  }
-
-  /** 应用进房武器进度基线（FR-A1：客户端 localStorage 上报；单类击杀钳制上限，防伪造直接满级） */
-  private applyProgress(f: SimFighter, progress?: Partial<Record<WeaponId, number>>): void {
-    for (const id of WEAPON_ORDER) {
-      const kills = Math.min(
-        MAX_REPORTED_CLASS_KILLS,
-        Math.max(0, Math.floor(Number(progress?.[id] ?? 0)) || 0),
-      );
-      f.classKills[id] = kills;
-      const tier = tierForKills(id, kills);
-      f.tier[id] = tier;
-      if (tier > 0) f.inv.setTierSpec(id, specForTier(id, tier));
-    }
   }
 
   /** 冲锋枪彩蛋模式口令验证（FR-E1）：对局进行中输入正确 4 位口令授予；
@@ -442,6 +451,7 @@ export class Room {
       time: this.time,
       mapId: this.mapId,
       entities: this.snapshotEntities(),
+      // 本局武器解锁进度（FR-W1；v0.4.1 起按局计，新进房恒全 0，重连/中途加入用于同步层级）
       progress: me ? { ...me.classKills } : undefined,
       // 中途加入已结束对局（FR-M1/L7 修复）：补发最近一次结算，客户端据此弹出结算面板
       matchEnd: this.matchOver ? (this.lastMatchEnd ?? undefined) : undefined,
@@ -516,6 +526,18 @@ export class Room {
         if (msg.switchTo !== null && msg.switchTo !== undefined && WEAPON_ORDER.includes(msg.switchTo)) {
           f.inv.switchTo(msg.switchTo, now);
         }
+        // 滑铲意图（FR-C7）：方向取消息携带的归一化向量（双击方向键时的移动向量）。
+        // 权威侧为「分阶段滑铲状态机」——助跑加速 → 匀速滑行 → 减速到停（DASH_TOTAL_TIME 内
+        // 走完 DASH_DISTANCE，位移由后续 tick 按 dashProgress 推进，见移动阶段）；
+        // 冷却期内 / 滑铲进行中重复意图忽略。滑铲中屏蔽常规移动（方向锁定），瞄准/开火不受影响
+        if (msg.dash && typeof msg.dash === 'object' && f.dash === null && now >= f.dashReadyAt) {
+          const dx = clampUnit(Number(msg.dash.x));
+          const dy = clampUnit(Number(msg.dash.y));
+          if ((dx !== 0 || dy !== 0) && Number.isFinite(dx) && Number.isFinite(dy)) {
+            f.dash = { dirX: dx, dirY: dy, startedAt: now, applied: 0 };
+            f.dashReadyAt = now + DASH_COOLDOWN;
+          }
+        }
         // 记录已消费 seq（客户端和解 ack，FR-N4）：仅接受单调递增的合法数值
         const seq = Math.floor(Number(msg.seq));
         if (Number.isFinite(seq) && seq > f.lastSeq) f.lastSeq = seq;
@@ -562,18 +584,35 @@ export class Room {
       if (Math.hypot(adx, ady) > 0.1) f.angle = Math.atan2(adx, ady);
 
       let moving = false;
-      const len = Math.hypot(f.input.moveX, f.input.moveY);
-      if (len > 0.01) {
+      if (f.dash !== null) {
+        // 滑铲进行中（FR-C7 分阶段滑行）：沿锁定方向按共享速度曲线推进——
+        // 目标累计距离 = DASH_DISTANCE × dashProgress(elapsed)（解析积分，与步长无关），
+        // 差量经 dashMove 分段碰撞位移（撞墙即停、不穿墙）；滑铲期屏蔽常规移动输入（方向锁定）
         moving = true;
-        const speed = PLAYER_SPEED * (f.bot ? botSpeedOf(f) : 1);
-        const r = resolveCircleWalls(
-          this.map,
-          f.x + (f.input.moveX / len) * speed * dt,
-          f.y + (f.input.moveY / len) * speed * dt,
-          PLAYER_RADIUS,
-        );
-        f.x = r.x;
-        f.y = r.y;
+        const elapsed = now - f.dash.startedAt;
+        const target = DASH_DISTANCE * dashProgress(elapsed);
+        const delta = target - f.dash.applied;
+        if (delta > 0) {
+          const r = dashMove(this.map, f.x, f.y, f.dash.dirX, f.dash.dirY, PLAYER_RADIUS, delta);
+          f.x = r.x;
+          f.y = r.y;
+          f.dash.applied = target;
+        }
+        if (elapsed >= DASH_TOTAL_TIME) f.dash = null;
+      } else {
+        const len = Math.hypot(f.input.moveX, f.input.moveY);
+        if (len > 0.01) {
+          moving = true;
+          const speed = PLAYER_SPEED * (f.bot ? botSpeedOf(f) : 1);
+          const r = resolveCircleWalls(
+            this.map,
+            f.x + (f.input.moveX / len) * speed * dt,
+            f.y + (f.input.moveY / len) * speed * dt,
+            PLAYER_RADIUS,
+          );
+          f.x = r.x;
+          f.y = r.y;
+        }
       }
 
       if (!this.matchOver) {
@@ -742,6 +781,7 @@ export class Room {
     f.respawnAt = null;
     f.bloom = 0;
     f.firePresses = 0;
+    f.dash = null; // 复活取消进行中的滑铲（死亡即中断滑行）
     f.inv.resetAll();
     // 清空位置历史并写入出生点：否则延迟补偿回溯（posAt 取 t <= rewindT 的最近历史）
     // 会在复活后最长 ~400ms 内命中「死亡前的旧坐标」，表现为新出生点打不中/旧位置隔空命中
@@ -783,6 +823,8 @@ export class Room {
       wanderSince: 0,
       nextFireAt: 0,
       pingMs: 0,
+      dashReadyAt: 0,
+      dash: null,
       lastInputAt: 0,
       hist: [],
     };

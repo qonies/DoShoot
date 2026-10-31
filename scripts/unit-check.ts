@@ -3,12 +3,17 @@
 
 import {
   CHEAT_RUSH_CODE,
+  DASH_DISTANCE,
+  DASH_TOTAL_TIME,
   DEFAULT_MAP,
   MAPS,
   WEAPON_ORDER,
   WEAPONS,
   WeaponInventory,
   damageAtRange,
+  dashMove,
+  dashProgress,
+  dashSpeed,
   fireIntervalSec,
   isWall,
   nextWeaponId,
@@ -25,6 +30,8 @@ import {
 } from '@DoShoot/shared';
 import { Room } from '../apps/server/src/room';
 import { clientToNdc, dpadVector, stickVector } from '../apps/client/src/game/touchmath';
+import { DASH_DOUBLE_TAP_MS, DoubleTapTracker } from '../apps/client/src/game/dashtap';
+import { CORRECTION_SMOOTH_MAX, decayFactor, isSmoothableCorrection } from '../apps/client/src/game/smoothing';
 import type { Server } from 'socket.io';
 
 let passed = 0;
@@ -75,6 +82,64 @@ ok('isWall 越界视为墙', isWall(map, -1, 5) && isWall(map, 5, 999));
   // 空地位置不变
   const free = resolveCircleWalls(map, 20.5, 2.5, 0.4);
   eq('resolveCircleWalls 空地不变', free.y, 2.5);
+}
+
+// ---------- dashMove（FR-C7 滑铲位移：确定性分段 + 不穿墙） ----------
+{
+  // 空旷直线（出生点向东，第 2 行全空）：位移恰为 DASH_DISTANCE
+  const open = dashMove(map, 2.5, 2.5, 1, 0, 0.4, DASH_DISTANCE);
+  eq('dashMove 空旷直线位移=DASH_DISTANCE', open.x, 2.5 + DASH_DISTANCE, 1e-6);
+  eq('dashMove 直线不偏航', open.y, 2.5, 1e-6);
+  // 斜向归一化后位移距离一致（对角方向）
+  const diag = dashMove(map, 2.5, 2.5, 1, 1, 0.4, DASH_DISTANCE);
+  eq('dashMove 斜向距离=DASH_DISTANCE', Math.hypot(diag.x - 2.5, diag.y - 2.5), DASH_DISTANCE, 1e-6);
+  // 撞墙止步：从 (10.5, 6.5) 向南滑入 L 形掩体行 y=8（x 8..12）→ 圆心停在 y = 8 - r
+  const blocked = dashMove(map, 10.5, 6.5, 0, 1, 0.4, DASH_DISTANCE);
+  eq('dashMove 撞墙停在墙前', blocked.y, 8 - 0.4, 1e-6);
+  ok('dashMove 撞墙位移 < DASH_DISTANCE', Math.abs(blocked.y - 6.5) < DASH_DISTANCE);
+  // 零向量原地不动
+  const zero = dashMove(map, 2.5, 2.5, 0, 0, 0.4, DASH_DISTANCE);
+  ok('dashMove 零方向原地不动', zero.x === 2.5 && zero.y === 2.5);
+}
+
+// ---------- dashProgress / dashSpeed（FR-C7 分阶段滑行：助跑→滑行→减速→停止） ----------
+{
+  eq('dashProgress 起点=0', dashProgress(0), 0);
+  eq('dashProgress 负时刻=0', dashProgress(-0.5), 0);
+  eq('dashProgress 总时长=1', dashProgress(DASH_TOTAL_TIME), 1, 1e-9);
+  eq('dashProgress 超时钳制=1', dashProgress(DASH_TOTAL_TIME + 10), 1);
+  // 单调不减（步进采样全剖面）
+  let mono = true;
+  let prev = 0;
+  for (let t = 0; t <= DASH_TOTAL_TIME + 0.05; t += 0.005) {
+    const p = dashProgress(t);
+    if (p < prev - 1e-9) mono = false;
+    prev = p;
+  }
+  ok('dashProgress 全剖面单调不减', mono);
+  // 速度剖面形态：0 → 1（助跑末）→ 1（滑行末）→ 0（结束），边界连续
+  eq('dashSpeed 起点=0', dashSpeed(0), 0);
+  eq('dashSpeed 滑行段=1', dashSpeed(DASH_TOTAL_TIME * 0.5), 1);
+  ok('dashSpeed 助跑末=1（边界连续）', Math.abs(dashSpeed(DASH_TOTAL_TIME * 0.25) - 1) < 0.06);
+  ok('dashSpeed 减速段递减', dashSpeed(DASH_TOTAL_TIME * 0.9) > 0 && dashSpeed(DASH_TOTAL_TIME * 0.9) < 1);
+  eq('dashSpeed 结束=0', dashSpeed(DASH_TOTAL_TIME), 0);
+  // 步长无关性：dt=1/60 与 dt=1/30 分步推进（dashProgress 增量 + dashMove）终点一致，
+  // 且总位移 = DASH_DISTANCE（空旷直线，出生点向东第 2 行全空）
+  const stepEnd = (stepDt: number): number => {
+    let x = 2.5;
+    let applied = 0;
+    for (let t = stepDt; t <= DASH_TOTAL_TIME + stepDt; t += stepDt) {
+      const target = DASH_DISTANCE * dashProgress(Math.min(t, DASH_TOTAL_TIME));
+      const delta = target - applied;
+      if (delta > 0) {
+        x = dashMove(map, x, 2.5, 1, 0, 0.4, delta).x;
+        applied = target;
+      }
+    }
+    return x;
+  };
+  eq('滑铲终点与步长无关（60fps vs 30Hz）', stepEnd(1 / 60), stepEnd(1 / 30), 1e-6);
+  eq('滑铲总位移 = DASH_DISTANCE', stepEnd(1 / 60) - 2.5, DASH_DISTANCE, 1e-6);
 }
 
 // ---------- damageAtRange / fireIntervalSec（FR-W2 数值衰减） ----------
@@ -134,6 +199,55 @@ ok('isWall 越界视为墙', isWall(map, -1, 5) && isWall(map, 5, 999));
   inv.resetAll();
   eq('resetAll 回到手枪', inv.current, 'pistol');
   eq('resetAll 手枪满匣', inv.state.ammo, WEAPONS.pistol!.magSize);
+
+  // resetTiers：按局重置解锁层级（FR-A1 v0.4.1）——层级覆盖清空、数值回基础、当前武器回手枪
+  inv.switchTo('smg', t0);
+  inv.setTierSpec('smg', specForTier('smg', 2));
+  ok('setTierSpec 后 smg 为 T2 数值', inv.spec.magSize > WEAPONS.smg!.magSize);
+  inv.resetTiers();
+  eq('resetTiers 回到手枪', inv.current, 'pistol');
+  eq('resetTiers smg 回基础弹匣', inv.states.smg!.ammo, WEAPONS.smg!.magSize);
+  inv.switchTo('smg', t0 + 1);
+  eq('resetTiers 后 smg spec 回基础（弹匣）', inv.spec.magSize, WEAPONS.smg!.magSize);
+  eq('resetTiers 后 smg spec 回基础（伤害）', inv.spec.damage, WEAPONS.smg!.damage);
+}
+
+// ---------- DoubleTapTracker（FR-C7 双击方向键滑铲判定） ----------
+{
+  const taps = new DoubleTapTracker();
+  ok('首次按下不触发', !taps.press('up', 0));
+  ok('窗口内第二次按下触发', taps.press('up', DASH_DOUBLE_TAP_MS - 1));
+  ok('触发后第三次按下重新起算（不连发）', !taps.press('up', DASH_DOUBLE_TAP_MS));
+  const t2 = new DoubleTapTracker();
+  t2.press('down', 0);
+  ok('超过窗口不触发', !t2.press('down', DASH_DOUBLE_TAP_MS + 1));
+  ok('不同方向键互不影响', (() => {
+    const t3 = new DoubleTapTracker();
+    t3.press('left', 0);
+    return !t3.press('right', 10) && t3.press('left', 20);
+  })());
+  ok('OS 自动重复（isRepeat）不参与双击', (() => {
+    const t4 = new DoubleTapTracker();
+    t4.press('up', 0);
+    return !t4.press('up', 10, true) && !t4.press('up', 20, true);
+  })());
+  taps.reset();
+  ok('reset 后重新起算', !taps.press('up', 0));
+}
+
+// ---------- smoothing（v0.4.2 画面平滑：和解修正判定 + 帧率无关衰减） ----------
+{
+  ok('小修正可平滑（阈值内）', isSmoothableCorrection(0.075, -0.02, CORRECTION_SMOOTH_MAX));
+  ok('零位移可平滑（无害）', isSmoothableCorrection(0, 0, CORRECTION_SMOOTH_MAX));
+  ok('达到阈值的位移视为瞬移不平滑', !isSmoothableCorrection(CORRECTION_SMOOTH_MAX, 0, CORRECTION_SMOOTH_MAX));
+  ok('超过阈值的位移视为瞬移不平滑', !isSmoothableCorrection(0, CORRECTION_SMOOTH_MAX + 0.1, CORRECTION_SMOOTH_MAX));
+  ok('斜向合成距离计入阈值', !isSmoothableCorrection(CORRECTION_SMOOTH_MAX * 0.8, CORRECTION_SMOOTH_MAX * 0.8, CORRECTION_SMOOTH_MAX));
+  ok('非有限修正量不平滑（防御）', !isSmoothableCorrection(Number.NaN, 0, CORRECTION_SMOOTH_MAX) && !isSmoothableCorrection(0, Infinity, CORRECTION_SMOOTH_MAX));
+  eq('decayFactor dt=0 不衰减', decayFactor(0, 0.05), 1);
+  ok('decayFactor 随 dt 单调衰减', decayFactor(0.016, 0.05) > decayFactor(0.033, 0.05) && decayFactor(0.033, 0.05) > decayFactor(0.1, 0.05));
+  ok('decayFactor tau 越大衰减越慢', decayFactor(0.033, 0.08) > decayFactor(0.033, 0.05));
+  ok('decayFactor tau 非法 → 立即对齐', decayFactor(0.016, 0) === 0 && decayFactor(0.016, -1) === 0);
+  ok('decayFactor 约 3 个 tau 后残差 <5%', decayFactor(0.15, 0.05) < 0.05);
 }
 
 // ---------- WeaponInventory 冲锋枪彩蛋模式（FR-E1：无限弹药/白名单/跨重生保留/回合结束撤销） ----------
@@ -307,9 +421,13 @@ async function roomChecks(): Promise<void> {
   // 1) 时限到期 → welcome 携带最近一次结算（FR-M1/L7）
   ok('时限到期 → welcome.matchEnd 存在', joinOver.welcome('a').matchEnd !== undefined);
 
-  // 2) 中途加入已结束房间（房内仍有人 → 不重置）→ 补发结算
+  // 2) 中途加入已结束房间（房内仍有人 → 不重置）→ 补发结算；且进度为按局全 0（FR-A1 v0.4.1）
   joinOver.addPlayer('b', 'B');
   ok('加入已结束房间 → welcome.matchEnd 补发', joinOver.welcome('b').matchEnd !== undefined);
+  ok(
+    '新进房进度全 0（不再接受跨局基线，FR-A1 v0.4.1）',
+    WEAPON_ORDER.every((id) => joinOver.welcome('b').progress?.[id] === 0),
+  );
 
   // 3) 空房复用（removePlayer 后再 addPlayer）→ 对局重置，结算不残留
   reuse.removePlayer('p0');
@@ -327,7 +445,7 @@ async function roomChecks(): Promise<void> {
   const wait = new Room(fakeIo, DEFAULT_MAP, 'unit-wait', 'normal', 30, 300, 5, '4821', false);
   ok('等待房初始为 waiting 态', wait.state === 'waiting');
   ok('房间号保持传入值', wait.code === '4821');
-  wait.addPlayer('h1', 'H1', undefined, true);
+  wait.addPlayer('h1', 'H1', true);
   wait.addPlayer('h2', 'H2');
   ok('建房者为房主', wait.hostId === 'h1');
   ok('等待态彩蛋口令被拒（NFR-5/FR-E1，防止开局自带无限弹药）', !wait.requestRush('h1', CHEAT_RUSH_CODE));

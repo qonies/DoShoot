@@ -119,6 +119,9 @@
           <input id="nickname" maxlength="16" autocomplete="off" />
         </label>
         <div class="buttons">
+          <!-- 快速加入（FR-L4，v0.4.1 恢复）：仅「刚退出不久的房间」存在时显示（TTL 3 分钟），
+               点击免输房间号直回该房间；文案由 refreshRecentRoomUi 动态生成（含房间号） -->
+          <button id="quickJoin" class="hidden"></button>
           <button id="start" class="primary" data-i18n="createRoom"></button>
         </div>
         <div class="buttons">

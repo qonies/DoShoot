@@ -26,6 +26,8 @@ export interface TouchCommand {
   reload: boolean;
   /** 切枪按钮按下沿（main 换算为 nextWeaponId 循环切换） */
   switchNext: boolean;
+  /** 双击方向触发的滑铲意图（FR-C7，v0.4.1 边缘触发；方向 = 当前 D-pad 合成向量，pad 模式专用） */
+  dash: { x: number; y: number } | null;
 }
 
 /** 本帧触屏瞄准输入（main.ts 换算为世界瞄准点）：
@@ -167,7 +169,8 @@ export class StickControls implements TouchController {
     this.uninstallGuards = installGestureGuards();
   }
 
-  /** 取走本帧触屏指令（边缘标志一次性复位；moveX/moveY/firing 为持续状态） */
+  /** 取走本帧触屏指令（边缘标志一次性复位；moveX/moveY/firing 为持续状态）。
+   *  stick 模式无方向键，不做双击滑铲（dash 恒 null，FR-C7 仅 pad 模式支持） */
   consume(): TouchCommand {
     const cmd: TouchCommand = {
       moveX: this.moveVec.x,
@@ -176,6 +179,7 @@ export class StickControls implements TouchController {
       firePressed: this.firePressedEdge,
       reload: this.reloadEdge,
       switchNext: this.switchEdge,
+      dash: null,
     };
     this.firePressedEdge = false;
     this.reloadEdge = false;

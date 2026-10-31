@@ -7,11 +7,14 @@ import { Server } from 'socket.io';
 import { io as Client, type Socket } from 'socket.io-client';
 import {
   CHEAT_RUSH_CODE,
+  DASH_DISTANCE,
   MAPS,
   PROTOCOL_VERSION,
   SNAPSHOT_RATE_MAX,
   SNAPSHOT_RATE_MIN,
+  WEAPON_ORDER,
   normalizeRoomCode,
+  raycastWalls,
   type InputMsg,
   type RoomInfoMsg,
   type SnapshotMsg,
@@ -344,6 +347,44 @@ async function run(): Promise<void> {
     //     持续开火弹药不消耗（无限弹药）。彩蛋模式跨重生保留（FR-E1），等待期间被 Bot 击杀
     //     不影响授予断言 → 用不感知死亡的 waitFor（waitForAlive 的「先活后死」中断会把
     //     「已授予但恰好死亡」误判为失败，属冒烟假失败，体检修复批次 3 修正）
+    // 4b2) 滑铲（FR-C7 分阶段滑行）：单条输入携带 dash 意图 → 服务端按 0.4s 速度曲线
+    //      （助跑→滑行→减速→停止）推进位移：轮询期间应观察到「中间滑行状态」（0.15~0.9×），
+    //      结束后总位移 ≈ DASH_DISTANCE。滑铲方向自动选择 4 个正向中射线无墙者（贴墙方向
+    //      位移会被墙截断）；死亡中断重试最多 3 次
+    let dashOk = false;
+    for (let attempt = 0; attempt < 3 && !dashOk; attempt++) {
+      if ((await waitForAlive(() => meAt()?.alive === true, 6000)) !== 'ok') break;
+      const before = meAt()!;
+      const range = MAPS['range']!;
+      const openDir =
+        ([[1, 0], [-1, 0], [0, 1], [0, -1]] as Array<[number, number]>).find(
+          ([dx, dy]) => raycastWalls(range, before.x, before.y, dx, dy, DASH_DISTANCE + 0.6) === null,
+        ) ?? [1, 0];
+      c1.socket.emit('input', {
+        seq: ++c1.seq,
+        moveX: 0, moveY: 0,
+        aimX: before.x + openDir[0]! * 5, aimY: before.y + openDir[1]! * 5,
+        firing: false,
+        firePressed: 0,
+        reload: false,
+        switchTo: null,
+        dash: { x: openDir[0]!, y: openDir[1]! },
+      } satisfies InputMsg);
+      let sawMidSlide = false;
+      dashOk = await waitFor(() => {
+        const d = Math.hypot((meAt()?.x ?? 0) - before.x, (meAt()?.y ?? 0) - before.y);
+        if (d >= DASH_DISTANCE * 0.15 && d <= DASH_DISTANCE * 0.9) sawMidSlide = true; // 中间滑行状态
+        return d >= DASH_DISTANCE * 0.8;
+      }, 2000);
+      dashOk = dashOk && sawMidSlide;
+    }
+    if (!dashOk) fail(`dash should slide phased to ~${DASH_DISTANCE} units (FR-C7)`);
+    else console.log(`[smoke:net] dash OK (phased slide, mid-slide observed, pos ${meAt()!.x.toFixed(1)},${meAt()!.y.toFixed(1)})`);
+
+    // 4c) 冲锋枪彩蛋模式（FR-E1）：错误口令无效；正确口令 → 快照 weaponId='rush' 且 rush=true；
+    //     持续开火弹药不消耗（无限弹药）。彩蛋模式跨重生保留（FR-E1），等待期间被 Bot 击杀
+    //     不影响授予断言 → 用不感知死亡的 waitFor（waitForAlive 的「先活后死」中断会把
+    //     「已授予但恰好死亡」误判为失败，属冒烟假失败，体检修复批次 3 修正）
     c1.socket.emit('rush', { code: '0000' });
     await sleep(300);
     if (meAt()?.rush === true) fail('wrong code must not grant rush mode (FR-E1)');
@@ -397,7 +438,11 @@ async function run(): Promise<void> {
     const c3 = await makeClient('Tester-3', 'alley');
     await sleep(300); // 等待至少若干帧快照
     if (c3.welcome!.mapId !== 'alley') fail(`expected alley map, got ${c3.welcome!.mapId}`);
-    if (c3.welcome!.progress === undefined) fail('welcome.progress missing (FR-W1/A1)');
+    if (c3.welcome!.progress === undefined) fail('welcome.progress missing (FR-W1)');
+    // 按局进度（FR-A1 v0.4.1）：新进房各类击杀必须全 0（浏览器不记忆历史层级）
+    if (!WEAPON_ORDER.every((id) => c3.welcome!.progress?.[id] === 0)) {
+      fail(`fresh join progress must be all-zero (FR-A1 v0.4.1), got ${JSON.stringify(c3.welcome!.progress)}`);
+    }
     const c3snap = c3.snapshots.at(-1);
     if (!c3snap || c3snap.matchTimeLeft == null) fail('snapshot.matchTimeLeft missing (FR-U5/M1)');
     if (c3snap.entities.some((e) => e.deaths === undefined)) fail('EntitySnapshot.deaths missing (FR-M4)');

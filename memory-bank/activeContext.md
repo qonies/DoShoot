@@ -1,7 +1,33 @@
 # 活动上下文（Active Context）
 
 ## 当前焦点
-**v0.4.0 首页精简与帮助菜单已落地（2026-10-30）**：大厅仅昵称+两个入口按钮（新建游戏→等待房间调参；加入游戏→房间号弹窗）；快速加入 UI 移除、断线重连改「回到上一局」条件按钮；操作提示移入 Esc 设置面板帮助区块 + 新增「返回首页」按钮——**浏览器手测（新建/加入弹窗/Esc 帮助与返回首页/重连按钮）与局域网多设备实测仍待验收**。
+**v0.4.1 追加②：滑铲分阶段滑行已落地（2026-10-30）**——滑铲由「瞬时位移」改为 **0.40s 三段速度曲线（助跑加速 0.10s → 匀速滑行 0.16s → 减速到停 0.14s，总位移 3.5、峰值 12.5 u/s ≈ 2.08× 走路）**：shared `dash.ts` 解析积分剖面（与步长无关）+ 服务端权威滑铲状态机 + 客户端同曲线预测（滑铲期跳过权威位置对齐）。同日此前已落地：画面平滑优化（和解修正表现层平滑）、快速加入回归 / 武器层级按局重置（协议 v4）。**浏览器手测（滑铲手感四段过程 / 贴墙滑铲 / 滑铲中开火 / 远端视角滑行轨迹）仍待验收**。
+
+## 最近变更（2026-10-30 · 滑铲分阶段滑行，v0.4.1 追加②）
+- **背景**：画面平滑修复后用户反馈滑铲仍是「瞬移」观感（瞬时位移 + 0.12s 视觉拖影不构成滑行过程）。
+- **shared `dash.ts`（新模块）**：`dashProgress(elapsed)` 三段速度剖面（助跑线性 0→峰值 / 滑行恒峰值 / 减速线性→0）的**解析积分**（0..1，与调用步长无关 → 服务端 30Hz tick 与客户端 60fps 同一 elapsed 得到同一累计距离）；`dashSpeed(elapsed)` 速度倍率（表现/测试）。常量：`DASH_RAMP_TIME=0.10 / DASH_GLIDE_TIME=0.16 / DASH_DECEL_TIME=0.14 / DASH_TOTAL_TIME=0.40`，`DASH_DISTANCE=3.5` 不变（峰值 = 3.5/0.28 = 12.5 u/s ≈ 2.08× PLAYER_SPEED）。`dashMove()` 保留（每帧差量的分段碰撞位移）。
+- **服务端 `room.ts`**：`SimFighter.dash = { dirX, dirY, startedAt, applied } | null`（方向锁定）；消费 dash 意图 → 建立状态 + `dashReadyAt = now + DASH_COOLDOWN`（冷却/滑铲中重复意图忽略）；移动阶段滑铲中按 `DASH_DISTANCE × dashProgress(elapsed)` 求目标累计距离、差量 `dashMove` 推进，结束置 null；**滑铲期屏蔽常规 WASD 位移**（方向锁定，`moving=true` 计入散布）；死亡 respawn / 断线 markDisconnected 清空滑铲。
+- **客户端 `world.ts`**：`localDash` 状态机同曲线逐帧推进（`advanceLocalDash`）；滑铲启动移到 buildInput 发送点（`startLocalDash`：状态 + 冷却 + `sfx.dash()` + 轻震 0.08）；**滑铲期跳过权威位置对齐**（`reconcileLocal` 仅推进 seq ack——中途硬对齐会被自身滑行进度拉回产生橡皮筋；结束后的对齐差值由画面平滑的视觉偏移吸收）；滑铲期 `predictMovement` 屏蔽 + `pendingInputs` 记 0 移动（与服务端屏蔽一致，重放不多走）；移除旧「一次性 applyDash / replayDash / pendingInputs.dash 字段」；死亡/matchReset 清空本地滑铲。
+- **协议不变**：`InputMsg.dash?` 语义不变（方向意图），PROTOCOL_VERSION 保持 v4；服务端与客户端同批发布无兼容问题。
+- **验证**：unit 175→**187**（剖面起点/钳制/单调/速度形态边界连续/步长无关性：dt=1/60 与 1/30 分步推进终点一致且总位移=DASH_DISTANCE）；smoke:net 滑铲断言升级（**观察到中间滑行状态 0.15~0.9× + 全程 ≥0.8×**，方向自动选 4 正向中 `raycastWalls` 无墙者——修「玩家恰好停在单箱旁向东滑铲被墙挡死」的断言盲区）ALL PASS；typecheck / check:i18n / smoke:server / build（gzip 157.54KB）全过。
+- **手测清单**：双击方向键四段过程观感（助跑→滑行→减速→停）、贴墙滑铲止步不穿墙、滑铲中转向无效但可开火/换弹、远端玩家视角滑行轨迹平滑、冷却 1.5s、死亡/复活/断线状态清理、与画面平滑（和解修正偏移）无相互干扰。
+
+## 最近变更（2026-10-30 · 画面平滑优化，v0.4.1 追加）
+- **诊断**：相机每帧跟随本地预测位置，而快照和解（~28Hz）会把「服务端 30Hz 定步 vs 客户端连续预测」的相位差以阶跃方式硬对齐（`reconcileLocal` 直接 `local.x = e.x`）→ 只读数值模拟实测每快照修正平均 0.075 单位（≈4px）、最大 0.317（≈16px），与「移动时轻微抖动」吻合（静止时不修正、无抖动）。次因：镜头震动逐帧 `Math.random()` 白噪声（开火时明显）；输入上行节流 `inputAcc = 0` 被帧率量化（放大相位差）。
+- **①和解修正视觉平滑**：新纯函数模块 `game/smoothing.ts`（`isSmoothableCorrection(dx,dy,maxDist)` 阈值判定 + `decayFactor(dt,tau)` 帧率无关衰减，常量 `CORRECTION_SMOOTH_MAX=1.5`）；`world.ts reconcileLocal` 记录对齐前后位置差，阈值内 → `local.addVisualOffset(delta)`（视觉落后该量、随衰减连续追上），≥1.5 单位（瞬移/换图）与复活分支 → `resetVisual()` 瞬时对齐；`entities.ts LocalPlayer.addVisualOffset` 增加总偏移钳制 `VISUAL_OFFSET_MAX=1.0`（防累积滞后），`DASH_SMOOTH_TAU` 重命名 `VISUAL_SMOOTH_TAU`（0.05，滑铲与和解修正共用同一衰减轨道）。**物理位置/瞄准/命中/延迟补偿全部不变**
+- **②镜头震动平滑**：`scene.ts` 新增 `shakeT` 时钟，`follow()` 用双正弦低频噪声（71.3/37.1 与 61.7/43.9 Hz 两轴）替代逐帧随机，`shake<0.004` 归零，`lookAt` 固定玩家（不再随机转向）
+- **③输入节奏恒定**：`main.ts` 节流改 `inputAcc -= 1/INPUT_SEND_RATE`（dt 钳制 0.05 < 2×1/30，单帧最多发一条，无需 while）
+- **验证**：模拟复测渲染位置每帧偏差 max 15.7px→2.9px、RMS 4.2px→0.7px；unit 164→175（smoothing 11 项：阈值内/瞬移/斜向/NaN 防御/衰减单调/tau 非法/3τ<5%）；typecheck / check:i18n / smoke:net ALL PASS / smoke:server / build（gzip 157.34KB）全过。服务端与协议零改动、版本号不变
+- **手测清单**：持续 WASD/斜向移动无阶跃感、贴墙滑动（碰撞修正最频繁）、边移动边开火（震动平滑）、滑铲仍平滑、复活/换图不拖影、瞄准手感不变
+
+## 最近变更（2026-10-30 · 快速加入回归/滑铲/按局重置，v0.4.1）
+- **快速加入（FR-L4 回归，语义=回刚离开的房间）**：`index.html` 大厅新增 `#quickJoin`（无 data-i18n，文案动态含房间号）；`main.ts` 新增最近房间模块——localStorage `DoShoot.recentRoom` = `{code, at}`（`at` = **离开时刻**：进房只记 `lastRoomCode`，`backToLobby()` 落盘），`RECENT_ROOM_TTL_MS` = 180s；`refreshRecentRoomUi()` 统一可见性（TTL 内 + `rejoinTimer === null`，即与「回到上一局」互斥且重连优先）；点击 `startGame('join', code)` 复用房间号链路；`onRejected 'noRoom'` 清记录（先置 `lastRoomCode = null` 再 backToLobby 防误落盘）。初始 `refreshLangUi()` 调用移到快速加入模块就绪后（避免 const TDZ）。服务端零改动
+- **滑铲（新增 FR-C7，方案 A 瞬时位移）**：shared `constants` 新增 `DASH_DISTANCE=3.5 / DASH_COOLDOWN=1.5 / DASH_SUBSTEP=0.2`；`collision.ts` 新增确定性 `dashMove()`（分段 resolveCircleWalls，不穿墙）；协议 `InputMsg.dash?: {x,y}`、`PROTOCOL_VERSION` 3→**4**；客户端新模块 `game/dashtap.ts`（`DoubleTapTracker` 纯函数 250ms 窗口、忽略 e.repeat），`input.ts` WASD/方向键双击 → `InputCommand.dash`（方向=当前移动向量，支持斜向），`touchpad.ts` D-pad 双击 → `TouchCommand.dash`（stick 模式恒 null）；**world.ts 在 buildInput（发送点）才施加预测位移**并随输入记入 `pendingInputs`（重放先 dash 后 moveBy，与服务端 tick 消费同序 → 和解无拖影；避免「预测已滑出被快照拉回」的一帧回跳）；服务端 `room.ts` 消费输入时按 `dashReadyAt` 冷却 + 存活校验后 `dashMove`。表现：`entities.ts LocalPlayer` 视觉偏移（`viewX/viewY`，指数衰减 τ=0.05 ≈0.12s 追上），`main.ts` 相机跟 `world.local.viewX/viewY`；`audio.ts sfx.dash()`（带通扫频白噪声）+ `addShake(0.1)`；死亡/matchReset 清 `pendingDash` 与视觉偏移（冷却两端均跨重生保留，语义一致）
+- **武器层级按局重置（FR-A1 v0.4.1 修订）**：客户端删除 `PROGRESS_KEY/loadProgress/saveProgress/onOwnKill`，启动 `localStorage.removeItem('DoShoot.progress')` 清旧键，`createRoom/join` 不再带 progress；协议删除 `JoinMsg/CreateRoomMsg.progress?`，`WelcomeMsg.progress?` 语义改为「本局各类击杀数」（重连/中途加入同步层级）；服务端删除 `applyProgress`/`MAX_REPORTED_CLASS_KILLS`、`addPlayer(id,name,asHost)`（index.ts 3 处调用同步），新增 `resetProgression()`（classKills/tier 归零 + `inv.resetTiers()`）在 `resetMatch()`（开局/空房复用/等待调参）与 `rematch()` 调用；shared `inventory.ts` 新增 `resetTiers()`（清 tierSpecs + resetAll）；客户端 `matchReset` 事件 → `inv.resetTiers()`。**效果：每次新游戏（建房开局/再来一局）全员从 T1 按本局击杀升级，浏览器不记忆历史层级**
+- **i18n 108→109 键**：+`lobby.quickJoin`（「快速加入 · 房间 {code}」）；`hint`/`hint.pad` 补「双击方向键滑铲」
+- **版本**：四处 package.json 0.4.0→**0.4.1**；docs/requirements.md v0.4.1（FR-L4 恢复 / 新增 FR-C7 / FR-W4·A1 按局 / 决策 #9 标注取代）
+- 验证：typecheck / unit 164（+19：dashMove×6、DoubleTapTracker×7、resetTiers×4、进房进度全 0）/ check:i18n（109 键）/ smoke:net（新增 4b2 滑铲位移断言 + 新进房 progress 全 0 断言）/ smoke:server（protocol v4）/ build（gzip 157.15KB）全过；**手测待做**（见下）
+- ⚠️ 手测清单：①离开房间回大厅 3 分钟内见「快速加入 · 房间 XXXX」、点击直回、等待房/对局中均可；超时/房间回收后按钮消失；②双击 WASD/方向键滑铲（直线/斜向/贴墙止步/1.5s 冷却/死亡时无效）、pad 模式 D-pad 双击；③新开一局与「再来一局」后所有武器回 T1、刷新页面后不残留旧层级；④触屏 stick 模式无滑铲（预期）；⑤桌面/触屏回归
 
 ## 最近变更（2026-10-30 · 首页精简与帮助菜单，v0.4.0）
 - **大厅精简**：`index.html` 删除 `#mode/#map/#difficulty/#killTarget/#timeLimit/#roomCode/#quickJoin`；「新建游戏」→ `createRoom({version,nickname,progress})` 参数全缺省（服务端默认 DEFAULT_MAP/normal/30杀/5min/BOT_COUNT_DEFAULT），房主在等待界面调参（FR-L8 成为参数唯一配置入口）

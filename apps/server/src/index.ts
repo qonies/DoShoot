@@ -96,7 +96,7 @@ io.on('connection', (socket) => {
         return;
       }
       joined = true;
-      room.addPlayer(socket.id, name, raw.progress);
+      room.addPlayer(socket.id, name);
       sessions.set(socket.id, { room, fighterId: socket.id });
       socket.join(room.id);
       socket.emit('welcome', room.welcome(socket.id));
@@ -132,7 +132,7 @@ io.on('connection', (socket) => {
       return;
     }
     joined = true;
-    room.addPlayer(socket.id, name, raw.progress);
+    room.addPlayer(socket.id, name);
     sessions.set(socket.id, { room, fighterId: socket.id });
     socket.join(room.id);
     socket.emit('welcome', room.welcome(socket.id));
@@ -152,7 +152,7 @@ io.on('connection', (socket) => {
       raw.difficulty === 'easy' || raw.difficulty === 'hard' ? raw.difficulty : 'normal';
     const room = rooms.createRoom(mapId, difficulty, sanitizeRule(raw));
     joined = true;
-    room.addPlayer(socket.id, name, raw.progress, true); // 建房者 = 房主
+    room.addPlayer(socket.id, name, true); // 建房者 = 房主
     sessions.set(socket.id, { room, fighterId: socket.id });
     socket.join(room.id);
     socket.emit('welcome', room.welcome(socket.id));

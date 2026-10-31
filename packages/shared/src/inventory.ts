@@ -71,6 +71,15 @@ export class WeaponInventory {
     this.current = this.rushActive ? 'rush' : 'pistol';
   }
 
+  /** 清除全部已解锁层级并重置（FR-A1 v0.4.1：武器解锁进度按局计，新局/再来一局回最初级）。
+   *  服务端 rematch/resetMatch 与客户端 matchReset 事件两侧同源调用 */
+  resetTiers(): void {
+    for (const id of WEAPON_ORDER) {
+      delete this.tierSpecs[id];
+    }
+    this.resetAll();
+  }
+
   /** 授予冲锋枪彩蛋模式（FR-E1，服务端口令验证后调用）：切至 rush 满匣，带切枪硬直；已激活返回 false */
   grantRush(now: number): boolean {
     if (this.rushActive) return false;

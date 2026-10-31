@@ -16,8 +16,9 @@ export class GameScene {
   private readonly viewSize = 20;
   private readonly dirLight: THREE.DirectionalLight;
   private readonly canvas: HTMLCanvasElement;
-  /** 镜头震动幅度（由开火后坐力触发，随时间衰减） */
   private shake = 0;
+  /** 震动噪声时钟（秒）：follow 的双正弦噪声相位基准，随 update 累计（v0.4.2 平滑震动） */
+  private shakeT = 0;
   private readonly raycaster = new THREE.Raycaster();
   private readonly groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   private readonly ndc = new THREE.Vector2();
@@ -109,7 +110,7 @@ export class GameScene {
     };
   }
 
-  /** 开火后坐力镜头震动（FR-W2 表现） */
+  /** 开火后坐力镜头震动（FR-W2 表现）；v0.4.2：震动改平滑噪声（见 follow/update） */
   addShake(amount: number): void {
     this.shake = Math.min(0.6, this.shake + amount);
   }
@@ -131,19 +132,25 @@ export class GameScene {
     }
   }
 
-  /** 每帧推进震动衰减 */
+  /** 每帧推进震动衰减（并累计震动噪声时钟，follow 用平滑噪声替代逐帧随机，v0.4.2） */
   update(dt: number): void {
     this.shake = Math.max(0, this.shake - dt * 2.2);
+    if (this.shake <= 0) this.shake = 0; // 归零后不再产生任何抖动
+    this.shakeT += dt;
   }
 
-  /** 相机跟随玩家（正交框随窗口比例更新；叠加震动抖动） */
+  /** 相机跟随玩家（正交框随窗口比例更新；叠加震动抖动）。
+   *  v0.4.2 画面平滑：震动用双正弦低频噪声替代逐帧 Math.random()（连续无噪点感），
+   *  幅度过小直接置零；lookAt 固定于玩家（不再随机转向），避免旋转分量放大抖动感 */
   follow(x: number, y: number): void {
-    const j = this.shake;
-    this.camera.position.set(
-      x + (Math.random() - 0.5) * j,
-      22,
-      y + 12 + (Math.random() - 0.5) * j,
-    );
+    let jx = 0;
+    let jy = 0;
+    if (this.shake > 0) {
+      const t = this.shakeT;
+      jx = (Math.sin(t * 71.3) * 0.6 + Math.sin(t * 37.1 + 1.7) * 0.4) * this.shake * 0.5;
+      jy = (Math.sin(t * 61.7 + 2.1) * 0.6 + Math.sin(t * 43.9 + 0.6) * 0.4) * this.shake * 0.5;
+    }
+    this.camera.position.set(x + jx, 22, y + 12 + jy);
     this.camera.lookAt(x, 0, y);
     this.dirLight.position.set(x + 8, 30, y + 6);
     this.dirLight.target.position.set(x, 0, y);

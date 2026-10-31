@@ -1,7 +1,9 @@
 /** 键鼠输入：WASD 移动、鼠标瞄准、开火（含按下沿）、换弹/切枪指令（FR-C1/C2、FR-W3、FR-U1 准星跟随）
+ *  双击方向键滑铲（FR-C7，v0.4.1）：WASD/方向键 250ms 内两次按下 → 携带当前移动向量的滑铲意图
  *  以及冲锋枪彩蛋口令缓冲（FR-E1：数字键依次输入 + Enter 上报，口令不含 1~6 不与切枪热键冲突） */
 
 import { CHEAT_RUSH_CODE, WEAPON_ORDER, type WeaponId } from '@DoShoot/shared';
+import { DoubleTapTracker } from './dashtap';
 
 /** 一帧内的输入指令（消费型：consumeCommands 读取后一次性标志复位） */
 export interface InputCommand {
@@ -16,7 +18,21 @@ export interface InputCommand {
   wheel: number;
   /** 本帧内输入了正确的冲锋枪彩蛋口令并按下 Enter（FR-E1，边缘触发） */
   cheatRush: boolean;
+  /** 双击方向键触发的滑铲意图（FR-C7，边缘触发）：方向为触发时刻的移动向量（已归一化，支持斜向） */
+  dash: { x: number; y: number } | null;
 }
+
+/** 滑铲方向键 → 方向标识（同一标识内做双击比较；WASD 与方向键等效） */
+const DASH_KEYS: Record<string, string> = {
+  KeyW: 'up',
+  ArrowUp: 'up',
+  KeyS: 'down',
+  ArrowDown: 'down',
+  KeyA: 'left',
+  ArrowLeft: 'left',
+  KeyD: 'right',
+  ArrowRight: 'right',
+};
 
 export class Input {
   firing = false;
@@ -38,6 +54,9 @@ export class Input {
   private cheatRushEdge = false;
   /** 口令输入超时（毫秒）：间隔过久的数字不视为同一次输入 */
   private static CODE_BUFFER_TIMEOUT_MS = 3000;
+  /** 双击方向键滑铲检测（FR-C7，v0.4.1） */
+  private readonly dashTaps = new DoubleTapTracker();
+  private dashEdge: { x: number; y: number } | null = null;
 
   private readonly onKeyDown = (e: KeyboardEvent): void => {
     // 设置/结算面板打开期间屏蔽游戏键（面板期间移动/切枪/换弹/口令输入均为误操作）；
@@ -46,6 +65,13 @@ export class Input {
     this.keys.add(e.code);
     if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space'].includes(e.code)) e.preventDefault();
     if (e.code === 'KeyR') this.reloadEdge = true;
+    // 双击方向键滑铲（FR-C7）：e.repeat 过滤 OS 自动重复；keys 已含本键 → 取当前移动向量
+    //（含双击键本身，支持按住另一键的斜向滑铲），归一化后作为滑铲方向
+    const dashDir = DASH_KEYS[e.code];
+    if (dashDir && this.dashTaps.press(dashDir, performance.now(), e.repeat === true)) {
+      const mv = this.getMoveVector();
+      this.dashEdge = mv.x !== 0 || mv.y !== 0 ? { x: mv.x, y: mv.y } : null;
+    }
     if (e.code.startsWith('Digit')) {
       const n = Number(e.code.slice(5));
       if (n >= 1 && n <= WEAPON_ORDER.length) this.switchRequest = WEAPON_ORDER[n - 1]!;
@@ -114,6 +140,8 @@ export class Input {
     this.keys.clear();
     this.firing = false;
     this.codeBuffer = '';
+    this.dashTaps.reset();
+    this.dashEdge = null;
   };
 
   constructor(canvas: HTMLCanvasElement) {
@@ -164,12 +192,14 @@ export class Input {
       switchTo: this.switchRequest,
       wheel: this.wheelSteps,
       cheatRush: this.cheatRushEdge,
+      dash: this.dashEdge,
     };
     this.firePressedEdge = false;
     this.reloadEdge = false;
     this.switchRequest = null;
     this.wheelSteps = 0;
     this.cheatRushEdge = false;
+    this.dashEdge = null;
     return cmd;
   }
 }

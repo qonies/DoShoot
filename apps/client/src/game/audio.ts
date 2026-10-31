@@ -156,6 +156,27 @@ class Sfx {
     });
   }
 
+  /** 滑铲（FR-C7，v0.4.1）：短促白噪声「唰」声——带通扫频由低到高再收尾 */
+  dash(): void {
+    const ctx = this.ctx;
+    const master = this.master;
+    if (!ctx || !master || !this.noise) return;
+    const t = ctx.currentTime;
+    const src = ctx.createBufferSource();
+    src.buffer = this.noise;
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(600, t);
+    filter.frequency.exponentialRampToValueAtTime(2400, t + 0.14);
+    filter.Q.value = 1.2;
+    const env = ctx.createGain();
+    env.gain.setValueAtTime(0.32, t);
+    env.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
+    src.connect(filter).connect(env).connect(master);
+    src.start(t);
+    src.stop(t + 0.16);
+  }
+
   /** 简易单音（振荡器 + 指数衰减包络；freqEnd 可做滑音） */
   private blip(freq: number, dur: number, gain: number, type: OscillatorType, freqEnd?: number): void {
     const ctx = this.ctx;

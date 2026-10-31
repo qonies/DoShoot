@@ -1,6 +1,8 @@
 /** 网络协议消息定义（M2 落地；集中定义于 shared，见 systemPatterns「协议」与 FR-N2/N7。
  *  v3（FR-L8 等待房间）：新增 C2S createRoom/updateRoom/startMatch、S2C roomUpdate，
- *  JoinMsg 增量 roomCode?，WelcomeMsg 增量 room?，JoinRejectReason 增量 'noRoom'） */
+ *  JoinMsg 增量 roomCode?，WelcomeMsg 增量 room?，JoinRejectReason 增量 'noRoom'；
+ *  v4（v0.4.1，FR-C7/A1）：移除 JoinMsg/CreateRoomMsg 的 progress?（武器解锁进度改为按局重置，
+ *  服务端不再接受进房基线上报），InputMsg 增量可选字段 dash?（滑铲意图） */
 
 import type { BotDifficulty } from './constants';
 import type { WeaponId } from './weapons';
@@ -25,8 +27,6 @@ export interface CreateRoomMsg {
   mapId?: string;
   /** Bot 难度（FR-B3；缺省 = normal） */
   difficulty?: BotDifficulty;
-  /** 武器解锁进度上报（FR-A1） */
-  progress?: Partial<Record<WeaponId, number>>;
   /** 对局生命周期（FR-L7）：击杀目标（缺省/非法 = MATCH_KILL_TARGET） */
   killTarget?: number;
   /** 对局时限秒（FR-L7；缺省/非法 = MATCH_TIME_LIMIT） */
@@ -48,8 +48,6 @@ export interface JoinMsg {
   difficulty?: 'easy' | 'normal' | 'hard';
   /** 断线重连（FR-N5）：上次对局的 playerId，30s 宽限内可回原状态；不可重连时按新进房处理 */
   rejoinId?: string | null;
-  /** 武器解锁进度上报（FR-A1：localStorage 基线，键 = 武器类 id，值 = 该类累计击杀数） */
-  progress?: Partial<Record<WeaponId, number>>;
   /** 对局生命周期（FR-L7）：击杀目标（KILL_TARGET_OPTIONS 之一；缺省/非法 = MATCH_KILL_TARGET） */
   killTarget?: number;
   /** 对局时限秒（TIME_LIMIT_OPTIONS 之一；缺省/非法 = MATCH_TIME_LIMIT）。先到击杀目标或时限即结束 */
@@ -115,6 +113,9 @@ export interface InputMsg {
   switchTo: WeaponId | null;
   /** 客户端最近平滑 RTT（ms，M4 延迟补偿回溯用；缺省按 0 处理。增量可选字段，协议 v2 兼容） */
   pingMs?: number;
+  /** 滑铲意图（FR-C7，v0.4.1 增量可选字段）：本条输入携带一次方向冲刺，方向为归一化意图向量
+   *  （双击方向键时的移动向量）。服务端按冷却/存活校验后用 dashMove 应用；缺省 = 无滑铲 */
+  dash?: { x: number; y: number };
 }
 
 // ---------- S2C ----------
@@ -197,7 +198,9 @@ export interface WelcomeMsg {
   /** 所在房间地图 id（客户端按此渲染场景，FR-MP4） */
   mapId: string;
   entities: EntitySnapshot[];
-  /** 本人武器解锁进度基线（FR-W1/A1：客户端据此同步本地 HUD 武器层级名称） */
+  /** 本人本局武器解锁进度（FR-W1：服务端权威按局计数，键 = 武器类 id，值 = 本局该类击杀数。
+   *  v0.4.1 起 FR-A1 取消跨局持久化——每次开局从 0 开始，此字段仅用于断线重连/中途加入时
+   *  同步本局已解锁层级；新进房恒为全 0） */
   progress?: Partial<Record<WeaponId, number>>;
   /** 对局已结束补发（FR-M1/L7，可选增量字段，协议 v2 前后端互相兼容）：
    *  中途加入「已结束」的房间时携带最近一次 matchEnd，客户端据此弹出结算面板（可再来一局）；

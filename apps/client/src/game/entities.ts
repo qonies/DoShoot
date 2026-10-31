@@ -4,6 +4,7 @@
 import * as THREE from 'three';
 import { PLAYER_HP } from '@DoShoot/shared';
 import type { EntitySnapshot } from '@DoShoot/shared';
+import { decayFactor } from './smoothing';
 
 const BUFFER_TTL = 1.0;
 
@@ -20,6 +21,11 @@ const HP_BAR_Y = 1.8;
 const HP_BAR_TILT = -Math.atan2(22, 12);
 /** 血量分段颜色：低 / 中 / 高 */
 const HP_BAR_COLORS: readonly number[] = [0xe57373, 0xffb74d, 0x4caf50];
+/** 滑铲视觉追上时间常数（秒，FR-C7）：偏移指数衰减，~0.12s 后残差 <10%（短促滑行观感）；
+ *  v0.4.2 起同一机制同时服务快照和解修正的视觉平滑（画面平滑优化，见 smoothing.ts） */
+const VISUAL_SMOOTH_TAU = 0.05;
+/** 表现层视觉偏移总量上限（世界单位，v0.4.2）：滑铲 + 和解修正叠加时防滞后无限累积 */
+const VISUAL_OFFSET_MAX = 1.0;
 
 interface HealthBar {
   group: THREE.Group;
@@ -187,7 +193,9 @@ function shortAngle(a: number, b: number): number {
   return d;
 }
 
-/** 本地玩家：客户端预测状态 + 表现网格 + 头顶血条（FR-C3/U1） */
+/** 本地玩家：客户端预测状态 + 表现网格 + 头顶血条（FR-C3/U1）
+ *  滑铲视觉平滑（FR-C7，v0.4.1）：物理位置瞬时到位，表现网格/镜头经衰减偏移 ~0.12s 追上，
+ *  把瞬时滑铲呈现为短促滑行（远端由既有快照插值自然平滑，无需处理） */
 export class LocalPlayer {
   readonly group: THREE.Group;
   private readonly hpBar: HealthBar;
@@ -199,6 +207,9 @@ export class LocalPlayer {
   kills = 0;
   /** 死亡时刻（本地渲染时钟），用于重生倒计时 */
   deathAt: number | null = null;
+  /** 滑铲视觉偏移（表现层）：物理位移差，随时间指数衰减到 0（镜头/网格用它追上物理位置） */
+  private visualOffX = 0;
+  private visualOffY = 0;
 
   constructor(scene: THREE.Scene, x: number, y: number) {
     this.x = x;
@@ -210,12 +221,52 @@ export class LocalPlayer {
     this.sync();
   }
 
+  /** 位移类表现偏移（滑铲 FR-C7 / 快照和解修正 v0.4.2）：视觉从旧位置开始追上（偏移 = −位移差）。
+   *  总量钳制到 VISUAL_OFFSET_MAX，防止连续修正叠加成持续滞后 */
+  addVisualOffset(dx: number, dy: number): void {
+    let ox = this.visualOffX - dx;
+    let oy = this.visualOffY - dy;
+    const mag = Math.hypot(ox, oy);
+    if (mag > VISUAL_OFFSET_MAX) {
+      const k = VISUAL_OFFSET_MAX / mag;
+      ox *= k;
+      oy *= k;
+    }
+    this.visualOffX = ox;
+    this.visualOffY = oy;
+  }
+
+  /** 每帧衰减视觉偏移（VISUAL_SMOOTH_TAU 时间常数，~0.12s 残差 <10%）；死亡/复位时直接清零 */
+  decayVisual(dt: number): void {
+    if (this.visualOffX === 0 && this.visualOffY === 0) return;
+    const k = decayFactor(dt, VISUAL_SMOOTH_TAU);
+    this.visualOffX *= k;
+    this.visualOffY *= k;
+    if (Math.abs(this.visualOffX) < 0.01 && Math.abs(this.visualOffY) < 0.01) {
+      this.visualOffX = 0;
+      this.visualOffY = 0;
+    }
+  }
+
+  resetVisual(): void {
+    this.visualOffX = 0;
+    this.visualOffY = 0;
+  }
+
+  /** 镜头/表现跟随位置（物理位置 + 视觉偏移） */
+  get viewX(): number {
+    return this.x + this.visualOffX;
+  }
+  get viewY(): number {
+    return this.y + this.visualOffY;
+  }
+
   sync(): void {
     this.group.visible = this.alive;
-    this.group.position.set(this.x, 0, this.y);
+    this.group.position.set(this.viewX, 0, this.viewY);
     this.group.rotation.y = this.angle;
     // 头顶血条（FR-C3/U1）：位置随预测位置每帧更新；宽度/颜色仅在变化时改写
-    this.hpBar.group.position.set(this.x, HP_BAR_Y, this.y);
+    this.hpBar.group.position.set(this.viewX, HP_BAR_Y, this.viewY);
     syncHealthBar(this.hpBar, this.hp, this.alive);
   }
 }

@@ -13,6 +13,7 @@ import { Input } from './input';
 import { installGestureGuards } from './gestures';
 import { createTouchButton, type TouchAim, type TouchCallbacks, type TouchCommand, type TouchController } from './touch';
 import { dpadVector, isTouchDevice } from './touchmath';
+import { DoubleTapTracker } from './dashtap';
 
 /** D-pad 方向键标识 */
 type Dir = 'up' | 'down' | 'left' | 'right';
@@ -36,6 +37,9 @@ export class PadControls implements TouchController {
   private firePressedEdge = false;
   private reloadEdge = false;
   private switchEdge = false;
+  /** 双击方向键滑铲检测（FR-C7，v0.4.1）：D-pad 同一方向 250ms 内两次按下触发 */
+  private readonly dashTaps = new DoubleTapTracker();
+  private dashEdge: { x: number; y: number } | null = null;
 
   private readonly uninstallGuards: () => void;
 
@@ -71,6 +75,8 @@ export class PadControls implements TouchController {
     this.pressedDirs.clear();
     this.aimPointerId = null;
     this.firing = false;
+    this.dashTaps.reset();
+    this.dashEdge = null;
     for (const btn of this.dpad.querySelectorAll('button')) btn.classList.remove('active');
   };
 
@@ -127,10 +133,12 @@ export class PadControls implements TouchController {
       firePressed: this.firePressedEdge,
       reload: this.reloadEdge,
       switchNext: this.switchEdge,
+      dash: this.dashEdge,
     };
     this.firePressedEdge = false;
     this.reloadEdge = false;
     this.switchEdge = false;
+    this.dashEdge = null;
     return cmd;
   }
 
@@ -153,7 +161,8 @@ export class PadControls implements TouchController {
 
   // ---------- 事件绑定 ----------
 
-  /** D-pad 方向键：pointerdown 置位方向、up/cancel/leave 复位；stopPropagation 防触发瞄准射击 */
+  /** D-pad 方向键：pointerdown 置位方向、up/cancel/leave 复位；stopPropagation 防触发瞄准射击。
+   *  双击同一方向（FR-C7，v0.4.1）→ 滑铲意图（方向 = 当前全部按下方向合成，支持斜向） */
   private bindDpadButton(btn: HTMLButtonElement, dir: Dir): void {
     const down = (e: PointerEvent): void => {
       if (e.pointerType !== 'touch') return;
@@ -162,6 +171,20 @@ export class PadControls implements TouchController {
       e.stopPropagation();
       btn.classList.add('active');
       this.pressedDirs.set(e.pointerId, dir);
+      if (this.dashTaps.press(dir, performance.now())) {
+        let up = false;
+        let dn = false;
+        let lf = false;
+        let rt = false;
+        for (const d of this.pressedDirs.values()) {
+          if (d === 'up') up = true;
+          else if (d === 'down') dn = true;
+          else if (d === 'left') lf = true;
+          else rt = true;
+        }
+        const mv = dpadVector(up, dn, lf, rt);
+        this.dashEdge = mv.x !== 0 || mv.y !== 0 ? { x: mv.x, y: mv.y } : null;
+      }
     };
     const up = (e: PointerEvent): void => {
       this.pressedDirs.delete(e.pointerId);
